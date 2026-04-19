@@ -753,8 +753,8 @@ with tab3:
             detail_df[show_cols].sort_values('거래일자', ascending=False)
             .style
             .apply(highlight_manual, axis=1)
-            .applymap(color_pnl,  subset=['실현손익'])
-            .applymap(color_type, subset=['매매구분'])
+            .map(color_pnl,  subset=['실현손익'])
+            .map(color_type, subset=['매매구분'])
             .format({'거래수량': '{:,.0f}', '거래단가': '{:,.0f}', '거래금액': '{:,.0f}',
                      '평균단가': '{:,.0f}', '잔고수량': '{:,.0f}', '실현손익': '{:,.0f}'}),
             use_container_width=True, height=400
@@ -937,7 +937,7 @@ with tab5:
 
         st.dataframe(
             display_table.style
-            .applymap(color_pnl_period, subset=['실현손익', '누적손익'])
+            .map(color_pnl_period, subset=['실현손익', '누적손익'])
             .format({'실현손익': '{:,.0f}', '누적손익': '{:,.0f}'}),
             use_container_width=True, height=350
         )
@@ -1024,7 +1024,7 @@ with tab6:
         st.dataframe(
             rank_view[rank_cols]
             .style
-            .applymap(color_rank_pnl, subset=['실현손익', '손익률(%)'])
+            .map(color_rank_pnl, subset=['실현손익', '손익률(%)'])
             .format({
                 '실현손익': '{:,.0f}', '손익률(%)': '{:+.2f}',
                 '누적매수금액': '{:,.0f}', '누적매도금액': '{:,.0f}',
@@ -1135,7 +1135,7 @@ with tab7:
             st.dataframe(
                 acc_summary[acc_disp_cols].sort_values('실현손익', ascending=False)
                 .style
-                .applymap(color_acc_pnl, subset=['실현손익', '손익률(%)'])
+                .map(color_acc_pnl, subset=['실현손익', '손익률(%)'])
                 .format({
                     '실현손익': '{:,.0f}', '손익률(%)': '{:+.2f}',
                     '누적매수금액': '{:,.0f}', '누적매도금액': '{:,.0f}',
@@ -1155,7 +1155,7 @@ with tab7:
             st.dataframe(
                 detail_pos[detail_cols].sort_values('실현손익', ascending=False)
                 .style
-                .applymap(color_acc_pnl, subset=['실현손익', '손익률(%)'])
+                .map(color_acc_pnl, subset=['실현손익', '손익률(%)'])
                 .format({
                     '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '보유원가': '{:,.0f}',
                     '실현손익': '{:,.0f}', '손익률(%)': '{:+.2f}',
@@ -1728,7 +1728,7 @@ with tab12:
                 return ''
 
             st.dataframe(
-                sum_df.style.applymap(color_bm, subset=['기간 수익률(%)']).format({'기간 수익률(%)': '{:+.2f}%'}),
+                sum_df.style.map(color_bm, subset=['기간 수익률(%)']).format({'기간 수익률(%)': '{:+.2f}%'}),
                 use_container_width=True, height=150,
             )
 
