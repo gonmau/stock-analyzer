@@ -725,7 +725,7 @@ def stock_selector_popup(label: str, stocks: list, key: str):
         else:
             st.toast("종목을 먼저 선택해주세요.")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
     "🗂 현재 잔고",
     "✏️ 수동 거래 입력",
     "🎯 종목별 상세",
@@ -738,6 +738,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.t
     "⚠️ 리스크",
     "🎯 목표 시뮬레이터",
     "📊 벤치마크",
+    "🤖 매매 시나리오",
 ])
 
 
@@ -1901,3 +1902,314 @@ with tab12:
                         delta=icon,
                         delta_color="normal" if diff > 0 else "inverse",
                     )
+
+# ════════════════════════════════════════
+# Tab 13: 매매 시나리오
+# ════════════════════════════════════════
+with tab13:
+    st.subheader("🤖 매매 시나리오 분석")
+    st.caption("현재 보유 종목 기준으로 익절/손절 시나리오, 최적 보유기간, 목표가 달성 알림을 분석합니다.")
+
+    hold_pos_sc = positions_df[positions_df['잔고수량'] > 0].copy()
+
+    if hold_pos_sc.empty:
+        st.info("현재 보유 중인 종목이 없습니다.")
+    else:
+        hold_pos_sc['손익률(%)'] = (
+            hold_pos_sc['실현손익'] / hold_pos_sc['누적매수금액'].replace(0, float('nan')) * 100
+        ).round(2)
+
+        sc_tab1, sc_tab2, sc_tab3 = st.tabs([
+            "📌 목표가 / 손절가 설정",
+            "⏱ 최적 보유기간",
+            "📊 익절/손절 시뮬레이션",
+        ])
+
+        # ── sc_tab1: 목표가 / 손절가 설정 ──
+        with sc_tab1:
+            st.markdown("#### 종목별 목표가 / 손절가 설정")
+            st.caption("현재 평균단가 기준으로 목표 수익률과 손절 수익률을 입력하면 목표가/손절가와 예상 손익을 계산합니다.")
+
+            col_tp, col_sl = st.columns(2)
+            target_pct  = col_tp.number_input("목표 수익률 (%)", min_value=0.1, value=10.0, step=0.5, format="%.1f")
+            stoploss_pct = col_sl.number_input("손절 수익률 (%)", min_value=0.1, value=5.0,  step=0.5, format="%.1f")
+
+            rows_tp = []
+            for _, r in hold_pos_sc.iterrows():
+                avg   = float(r['평균단가'])
+                qty   = float(r['잔고수량'])
+                cost  = float(r['보유원가'])
+                tp    = avg * (1 + target_pct / 100)
+                sl    = avg * (1 - stoploss_pct / 100)
+                tp_pnl = (tp - avg) * qty
+                sl_pnl = (sl - avg) * qty
+                rows_tp.append({
+                    '종목명':   r['종목명'],
+                    '평균단가': avg,
+                    '잔고수량': qty,
+                    '보유원가': cost,
+                    '목표가':   round(tp),
+                    '손절가':   round(sl),
+                    '목표 달성 시 손익':  round(tp_pnl),
+                    '손절 시 손익':       round(sl_pnl),
+                    '목표가 대비 필요 상승': f"+{target_pct:.1f}%",
+                    '손절가 대비 하락폭':   f"-{stoploss_pct:.1f}%",
+                })
+
+            tp_df = pd.DataFrame(rows_tp)
+
+            # 요약 지표
+            t1, t2, t3, t4 = st.columns(4)
+            t1.metric("보유 종목 수", f"{len(tp_df)}개")
+            t2.metric("전체 목표 달성 시 총손익", f"₩{tp_df['목표 달성 시 손익'].sum():,.0f}")
+            t3.metric("전체 손절 시 총손실", f"₩{tp_df['손절 시 손익'].sum():,.0f}")
+            rr = abs(tp_df['목표 달성 시 손익'].sum() / tp_df['손절 시 손익'].sum()) if tp_df['손절 시 손익'].sum() != 0 else 0
+            t4.metric("포트폴리오 손익비", f"{rr:.2f}:1")
+
+            # 목표가/손절가 차트
+            fig_tp = go.Figure()
+            fig_tp.add_trace(go.Bar(
+                name='목표가까지', x=tp_df['종목명'],
+                y=tp_df['목표 달성 시 손익'],
+                marker_color='#e74c3c', opacity=0.85,
+                text=tp_df['목표가'].apply(lambda x: f"₩{x:,.0f}"),
+                textposition='outside',
+            ))
+            fig_tp.add_trace(go.Bar(
+                name='손절 시', x=tp_df['종목명'],
+                y=tp_df['손절 시 손익'],
+                marker_color='#2980b9', opacity=0.85,
+                text=tp_df['손절가'].apply(lambda x: f"₩{x:,.0f}"),
+                textposition='outside',
+            ))
+            fig_tp.update_layout(
+                barmode='group', yaxis_title='예상 손익 (원)',
+                template='plotly_dark', height=380,
+                legend=dict(orientation='h', y=1.08),
+            )
+            st.plotly_chart(fig_tp, use_container_width=True)
+
+            def _color_tp(val):
+                try:
+                    v = float(val)
+                    if v > 0: return 'color:#e74c3c;font-weight:bold'
+                    if v < 0: return 'color:#2980b9;font-weight:bold'
+                except: pass
+                return ''
+
+            disp_cols_tp = ['종목명', '평균단가', '잔고수량', '보유원가', '목표가', '손절가',
+                            '목표 달성 시 손익', '손절 시 손익']
+            st.dataframe(
+                tp_df[disp_cols_tp]
+                .style
+                .map(_color_tp, subset=['목표 달성 시 손익', '손절 시 손익'])
+                .format({
+                    '평균단가': '{:,.0f}', '잔고수량': '{:,.0f}', '보유원가': '{:,.0f}',
+                    '목표가': '{:,.0f}', '손절가': '{:,.0f}',
+                    '목표 달성 시 손익': '{:,.0f}', '손절 시 손익': '{:,.0f}',
+                }),
+                use_container_width=True, height=380,
+            )
+            csv_tp = tp_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+            st.download_button("📥 목표가/손절가 CSV", csv_tp, "목표가손절가.csv", "text/csv")
+
+        # ── sc_tab2: 최적 보유기간 ──
+        with sc_tab2:
+            st.markdown("#### 과거 패턴 기반 최적 보유기간 분석")
+            st.caption("과거 매도 이력에서 보유기간별 평균 손익률을 계산해 최적 보유기간을 도출합니다.")
+
+            @st.cache_data
+            def calc_optimal_hold(_df):
+                rows = []
+                for sym_key in _df['종목키'].unique():
+                    detail = calculate_trade_detail(_df, sym_key)
+                    detail = detail.sort_values('거래일자')
+                    last_buy_date = None
+                    avg_at_buy = None
+                    for _, r in detail.iterrows():
+                        if r.get('매매유형') == 'BUY':
+                            last_buy_date = r['거래일자']
+                            avg_at_buy = float(r.get('평균단가', 0))
+                        elif r.get('매매유형') == 'SELL' and last_buy_date is not None:
+                            hold_days = (r['거래일자'] - last_buy_date).days
+                            pnl = float(r.get('실현손익', 0))
+                            cost_basis = avg_at_buy * float(r.get('거래수량', 0)) if avg_at_buy else 0
+                            pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
+                            rows.append({
+                                '종목명':   r['종목명'],
+                                '종목키':   sym_key,
+                                '보유기간': hold_days,
+                                '실현손익': pnl,
+                                '손익률':   pnl_pct,
+                                '승리':     1 if pnl > 0 else 0,
+                            })
+                return pd.DataFrame(rows)
+
+            opt_df = calc_optimal_hold(combined_df)
+
+            if opt_df.empty:
+                st.info("매도 이력이 없습니다.")
+            else:
+                bins  = [0, 1, 3, 7, 14, 30, 90, 180, 365, 99999]
+                labels = ['당일', '2~3일', '4~7일', '8~14일', '15~30일', '1~3개월', '3~6개월', '6개월~1년', '1년+']
+                opt_df['보유구간'] = pd.cut(opt_df['보유기간'], bins=bins, labels=labels, right=True)
+
+                grp = opt_df.groupby('보유구간', observed=True).agg(
+                    거래수=('실현손익', 'count'),
+                    평균손익률=('손익률', 'mean'),
+                    승률=('승리', 'mean'),
+                    총손익=('실현손익', 'sum'),
+                ).reset_index()
+                grp['승률(%)'] = (grp['승률'] * 100).round(1)
+                grp['평균손익률(%)'] = grp['평균손익률'].round(2)
+
+                best_row = grp.loc[grp['평균손익률(%)'].idxmax()]
+                best_win  = grp.loc[grp['승률(%)'].idxmax()]
+
+                oh1, oh2, oh3 = st.columns(3)
+                oh1.metric("평균손익률 최고 구간", str(best_row['보유구간']), f"{best_row['평균손익률(%)']:+.1f}%")
+                oh2.metric("승률 최고 구간", str(best_win['보유구간']), f"{best_win['승률(%)']:.0f}%")
+                oh3.metric("전체 분석 거래수", f"{len(opt_df)}건")
+
+                fig_oh = go.Figure()
+                bar_colors = ['#e74c3c' if v >= 0 else '#2980b9' for v in grp['평균손익률(%)']]
+                fig_oh.add_trace(go.Bar(
+                    x=grp['보유구간'].astype(str), y=grp['평균손익률(%)'],
+                    name='평균손익률(%)', marker_color=bar_colors,
+                    text=grp['평균손익률(%)'].apply(lambda x: f"{x:+.1f}%"),
+                    textposition='outside',
+                ))
+                fig_oh.add_trace(go.Scatter(
+                    x=grp['보유구간'].astype(str), y=grp['승률(%)'],
+                    mode='lines+markers', name='승률(%)',
+                    line=dict(color='#f1c40f', width=2), yaxis='y2',
+                ))
+                fig_oh.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.3)')
+                fig_oh.update_layout(
+                    yaxis=dict(title='평균손익률 (%)'),
+                    yaxis2=dict(title='승률 (%)', overlaying='y', side='right', range=[0, 110]),
+                    template='plotly_dark', height=360,
+                    legend=dict(orientation='h', y=1.08),
+                )
+                st.plotly_chart(fig_oh, use_container_width=True)
+
+                # 현재 보유 종목별 권장 보유기간
+                st.markdown("#### 현재 보유 종목 — 과거 패턴 기반 권장 구간")
+                rec_rows = []
+                for _, r in hold_pos_sc.iterrows():
+                    sym = r['종목키']
+                    sym_hist = opt_df[opt_df['종목키'] == sym]
+                    if sym_hist.empty:
+                        rec_rows.append({'종목명': r['종목명'], '과거 매도수': 0,
+                                         '권장 보유구간': '데이터 없음', '해당구간 평균손익률': '-', '해당구간 승률': '-'})
+                        continue
+                    sg = sym_hist.groupby('보유구간', observed=True).agg(
+                        평균손익률=('손익률', 'mean'), 승률=('승리', 'mean'), 거래수=('실현손익', 'count')
+                    ).reset_index()
+                    if sg.empty:
+                        rec_rows.append({'종목명': r['종목명'], '과거 매도수': len(sym_hist),
+                                         '권장 보유구간': '데이터 부족', '해당구간 평균손익률': '-', '해당구간 승률': '-'})
+                        continue
+                    best = sg.loc[sg['평균손익률'].idxmax()]
+                    rec_rows.append({
+                        '종목명':          r['종목명'],
+                        '과거 매도수':     len(sym_hist),
+                        '권장 보유구간':   str(best['보유구간']),
+                        '해당구간 평균손익률': f"{best['평균손익률']:+.1f}%",
+                        '해당구간 승률':   f"{best['승률']*100:.0f}%",
+                    })
+                st.dataframe(pd.DataFrame(rec_rows), use_container_width=True, height=300)
+
+        # ── sc_tab3: 익절/손절 시뮬레이션 ──
+        with sc_tab3:
+            st.markdown("#### 보유 종목별 익절/손절 시나리오 시뮬레이션")
+            st.caption("현재가를 입력하면 각 시나리오별 최종 손익을 시뮬레이션합니다.")
+
+            stock_list_sc = sorted(hold_pos_sc['종목명'].tolist())
+            sel_sc = st.selectbox("종목 선택", stock_list_sc, key="sc_stock_sel")
+
+            if sel_sc:
+                pos_sc = hold_pos_sc[hold_pos_sc['종목명'] == sel_sc].iloc[0]
+                avg_sc  = float(pos_sc['평균단가'])
+                qty_sc  = float(pos_sc['잔고수량'])
+                cost_sc = float(pos_sc['보유원가'])
+                realized_sc = float(pos_sc['실현손익'])
+
+                sc1, sc2, sc3 = st.columns(3)
+                current_price = sc1.number_input("현재가 (원)", min_value=1,
+                                                  value=int(avg_sc), step=100, format="%d")
+                tp_pct_sim  = sc2.number_input("익절 목표 (%)", min_value=0.1, value=10.0, step=0.5)
+                sl_pct_sim  = sc3.number_input("손절 기준 (%)", min_value=0.1, value=5.0,  step=0.5)
+
+                unrealized = (current_price - avg_sc) * qty_sc
+                tp_price   = avg_sc * (1 + tp_pct_sim / 100)
+                sl_price   = avg_sc * (1 - sl_pct_sim / 100)
+                tp_pnl_sim = (tp_price - avg_sc) * qty_sc
+                sl_pnl_sim = (sl_price - avg_sc) * qty_sc
+
+                st.divider()
+                ms1, ms2, ms3, ms4 = st.columns(4)
+                ms1.metric("평균단가", f"₩{avg_sc:,.0f}")
+                ms2.metric("현재 평가손익", f"₩{unrealized:,.0f}",
+                           delta=f"{unrealized/cost_sc*100:+.2f}%" if cost_sc else None,
+                           delta_color="normal" if unrealized >= 0 else "inverse")
+                ms3.metric("익절가", f"₩{tp_price:,.0f}", delta=f"+{tp_pct_sim:.1f}%")
+                ms4.metric("손절가", f"₩{sl_price:,.0f}", delta=f"-{sl_pct_sim:.1f}%", delta_color="inverse")
+
+                # 시나리오 비교 표
+                scenarios = [
+                    {"시나리오": "즉시 매도 (현재가)", "매도가": current_price,
+                     "매도 시 손익": round((current_price - avg_sc) * qty_sc),
+                     "누적 총손익 (실현+미실현)": round(realized_sc + (current_price - avg_sc) * qty_sc)},
+                    {"시나리오": f"익절 ({tp_pct_sim:+.1f}%)", "매도가": round(tp_price),
+                     "매도 시 손익": round(tp_pnl_sim),
+                     "누적 총손익 (실현+미실현)": round(realized_sc + tp_pnl_sim)},
+                    {"시나리오": f"손절 (-{sl_pct_sim:.1f}%)", "매도가": round(sl_price),
+                     "매도 시 손익": round(sl_pnl_sim),
+                     "누적 총손익 (실현+미실현)": round(realized_sc + sl_pnl_sim)},
+                    {"시나리오": "본전 매도", "매도가": round(avg_sc),
+                     "매도 시 손익": 0,
+                     "누적 총손익 (실현+미실현)": round(realized_sc)},
+                ]
+                sc_df = pd.DataFrame(scenarios)
+
+                def _color_sc(val):
+                    try:
+                        v = float(val)
+                        if v > 0: return 'color:#e74c3c;font-weight:bold'
+                        if v < 0: return 'color:#2980b9;font-weight:bold'
+                    except: pass
+                    return ''
+
+                st.dataframe(
+                    sc_df.style
+                    .map(_color_sc, subset=['매도 시 손익', '누적 총손익 (실현+미실현)'])
+                    .format({'매도가': '{:,.0f}', '매도 시 손익': '{:,.0f}',
+                             '누적 총손익 (실현+미실현)': '{:,.0f}'}),
+                    use_container_width=True, height=210,
+                )
+
+                # 가격 범위별 손익 곡선
+                import numpy as np
+                prices = np.linspace(avg_sc * 0.7, avg_sc * 1.5, 100)
+                pnls   = (prices - avg_sc) * qty_sc
+
+                fig_sc = go.Figure()
+                fig_sc.add_trace(go.Scatter(
+                    x=prices, y=pnls, mode='lines', name='매도 시 손익',
+                    line=dict(width=2.5, color='#f1c40f'),
+                    fill='tozeroy',
+                    fillcolor='rgba(231,76,60,0.15)',
+                ))
+                fig_sc.add_vline(x=current_price, line_dash='dash', line_color='#95a5a6',
+                                 annotation_text=f"현재가 ₩{current_price:,.0f}")
+                fig_sc.add_vline(x=tp_price, line_dash='dot', line_color='#e74c3c',
+                                 annotation_text=f"익절 ₩{round(tp_price):,.0f}")
+                fig_sc.add_vline(x=sl_price, line_dash='dot', line_color='#2980b9',
+                                 annotation_text=f"손절 ₩{round(sl_price):,.0f}")
+                fig_sc.add_hline(y=0, line_dash='dash', line_color='rgba(255,255,255,0.3)')
+                fig_sc.update_layout(
+                    xaxis_title='매도 가격 (원)', yaxis_title='손익 (원)',
+                    template='plotly_dark', height=360,
+                )
+                st.plotly_chart(fig_sc, use_container_width=True)
