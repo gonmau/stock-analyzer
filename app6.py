@@ -579,6 +579,152 @@ c3.metric("보유 평가원가",  f"₩{total_hold_cost:,.0f}")
 c4.metric("수동 입력 건수", f"{manual_cnt}건", delta="T+2 미반영 보정용")
 st.divider()
 
+
+# ════════════════════════════════════════
+# 종목 상세 팝업 (공통)
+# ════════════════════════════════════════
+@st.dialog("종목 상세", width="large")
+def show_stock_dialog(stock_name: str):
+    sym_key = combined_df[combined_df["종목명"] == stock_name]["종목키"].iloc[0]
+    detail_df = calculate_trade_detail(combined_df, sym_key)
+    pos_row = positions_df[positions_df["종목키"] == sym_key]
+
+    # ── 상단 요약 지표
+    if not pos_row.empty:
+        p = pos_row.iloc[0]
+        pnl_rate = (p["실현손익"] / p["누적매수금액"] * 100) if p["누적매수금액"] else 0
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("실현손익", f"₩{p['실현손익']:,.0f}")
+        c2.metric("손익률", f"{pnl_rate:+.2f}%")
+        c3.metric("잔고수량", f"{p['잔고수량']:,}주")
+        c4.metric("평균단가", f"₩{p['평균단가']:,.0f}")
+        c5.metric("보유원가", f"₩{p['보유원가']:,.0f}")
+
+    # ── 보유기간 / 계좌별 비중
+    buy_sells = detail_df[detail_df["매매유형"].isin(["BUY","SELL"])]
+    if not buy_sells.empty:
+        first_buy = detail_df[detail_df["매매유형"] == "BUY"]["거래일자"].min()
+        last_trade = detail_df["거래일자"].max()
+        hold_days = (last_trade - first_buy).days if pd.notna(first_buy) else 0
+
+        acc_dist = combined_df[combined_df["종목키"] == sym_key].groupby("계좌")["거래금액"].sum()
+        acc_str = "  /  ".join([f"{a}: ₩{v:,.0f}" for a, v in acc_dist.items()])
+
+        i1, i2 = st.columns(2)
+        i1.info(f"📅 첫 매수: {str(first_buy)[:10]}  |  활동 기간: {hold_days}일")
+        i2.info(f"🏦 계좌별 거래금액:  {acc_str}")
+
+    st.divider()
+
+    # ── 탭 구성
+    dtab1, dtab2, dtab3 = st.tabs(["📈 매매 타임라인", "📋 거래 내역", "💰 실현손익 추이"])
+
+    with dtab1:
+        buy_df  = detail_df[detail_df["매매유형"] == "BUY"]
+        sell_df = detail_df[detail_df["매매유형"] == "SELL"]
+        fig = go.Figure()
+        if not buy_df.empty:
+            fig.add_trace(go.Scatter(
+                x=buy_df["거래일자"], y=buy_df["거래단가"], mode="markers", name="매수",
+                marker=dict(color="#e74c3c", symbol="triangle-up",
+                            size=buy_df["거래수량"].apply(lambda x: max(8, min(28, x/10)))),
+                hovertemplate="%{x}<br>매수 %{y:,.0f}원<extra></extra>"
+            ))
+        if not sell_df.empty:
+            fig.add_trace(go.Scatter(
+                x=sell_df["거래일자"], y=sell_df["거래단가"], mode="markers", name="매도",
+                marker=dict(color="#2980b9", symbol="triangle-down",
+                            size=sell_df["거래수량"].apply(lambda x: max(8, min(28, x/10)))),
+                hovertemplate="%{x}<br>매도 %{y:,.0f}원<extra></extra>"
+            ))
+        if not detail_df.empty:
+            fig.add_trace(go.Scatter(
+                x=detail_df["거래일자"], y=detail_df["평균단가"],
+                mode="lines", name="평균단가",
+                line=dict(color="#f39c12", width=1.5, dash="dot"),
+            ))
+        fig.update_layout(template="plotly_dark", height=360,
+                          xaxis_title="날짜", yaxis_title="단가 (원)",
+                          legend=dict(orientation="h", y=1.08))
+        st.plotly_chart(fig, use_container_width=True)
+
+        # 계좌별 비중 파이
+        acc_buy = combined_df[(combined_df["종목키"] == sym_key) & (combined_df["매매유형"] == "BUY")]
+        if not acc_buy.empty:
+            acc_amt = acc_buy.groupby("계좌")["거래금액"].sum().reset_index()
+            fig_pie = go.Figure(go.Pie(
+                labels=acc_amt["계좌"], values=acc_amt["거래금액"],
+                hole=0.4, textinfo="label+percent",
+            ))
+            fig_pie.update_layout(template="plotly_dark", height=260,
+                                  title="계좌별 매수 비중", showlegend=False)
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+    with dtab2:
+        show_cols = ["거래일자", "매매구분", "거래수량", "거래단가", "거래금액",
+                     "평균단가", "잔고수량", "실현손익", "계좌"]
+        show_cols = [c for c in show_cols if c in detail_df.columns]
+
+        def _cpnl(v):
+            try:
+                f = float(v)
+                if f > 0: return "color:#e74c3c;font-weight:bold"
+                if f < 0: return "color:#2980b9;font-weight:bold"
+            except: pass
+            return ""
+        def _ctype(v):
+            s = str(v)
+            if "매수" in s: return "color:#e74c3c"
+            if "매도" in s: return "color:#2980b9"
+            return ""
+
+        st.dataframe(
+            detail_df[show_cols].sort_values("거래일자", ascending=False)
+            .style
+            .map(_cpnl, subset=["실현손익"])
+            .map(_ctype, subset=["매매구분"])
+            .format({"거래수량": "{:,.0f}", "거래단가": "{:,.0f}", "거래금액": "{:,.0f}",
+                     "평균단가": "{:,.0f}", "잔고수량": "{:,.0f}", "실현손익": "{:,.0f}"}),
+            use_container_width=True, height=380
+        )
+
+    with dtab3:
+        pnl_df = detail_df[detail_df["실현손익"] != 0].copy()
+        if pnl_df.empty:
+            st.info("실현손익 데이터가 없습니다.")
+        else:
+            pnl_df["누적손익"] = pnl_df["실현손익"].cumsum()
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(
+                x=pnl_df["거래일자"], y=pnl_df["실현손익"], name="매도별 실현손익",
+                marker_color=pnl_df["실현손익"].apply(lambda v: "#e74c3c" if v > 0 else "#2980b9")
+            ))
+            fig2.add_trace(go.Scatter(
+                x=pnl_df["거래일자"], y=pnl_df["누적손익"],
+                mode="lines+markers", name="누적손익",
+                line=dict(color="#f1c40f", width=2), yaxis="y2"
+            ))
+            fig2.update_layout(
+                yaxis=dict(title="매도별 손익"),
+                yaxis2=dict(title="누적손익", overlaying="y", side="right"),
+                template="plotly_dark", height=360,
+                legend=dict(orientation="h", y=1.08),
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+
+def stock_selector_popup(label: str, stocks: list, key: str):
+    """종목 선택 → 팝업 트리거 공통 위젯."""
+    if not stocks:
+        return
+    cols = st.columns([3, 1])
+    sel = cols[0].selectbox(label, ["-- 종목 선택 --"] + stocks, key=key)
+    if cols[1].button("🔍 상세보기", key=key + "_btn", use_container_width=True):
+        if sel != "-- 종목 선택 --":
+            show_stock_dialog(sel)
+        else:
+            st.toast("종목을 먼저 선택해주세요.")
+
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12 = st.tabs([
     "🗂 현재 잔고",
     "✏️ 수동 거래 입력",
@@ -631,6 +777,8 @@ with tab1:
     )
     csv_bytes = disp_pos[base_cols].to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
     st.download_button("📥 잔고 CSV 다운로드", csv_bytes, "잔고현황.csv", "text/csv")
+    st.divider()
+    stock_selector_popup("종목 상세 팝업", sorted(disp_pos['종목명'].dropna().unique().tolist()), key="popup_tab1")
 
 
 # ════════════════════════════════════════
@@ -943,6 +1091,8 @@ with tab5:
         )
         csv_p = display_table.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
         st.download_button("📥 기간별 손익 CSV", csv_p, f"기간별손익_{period_opt}.csv", "text/csv")
+        st.divider()
+        stock_selector_popup("종목 상세 팝업", sorted(combined_df['종목명'].dropna().unique().tolist()), key="popup_tab5")
 
 
 # ════════════════════════════════════════
@@ -1034,6 +1184,8 @@ with tab6:
         )
         csv_r = rank_view[rank_cols].to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
         st.download_button("📥 손익률 랭킹 CSV", csv_r, "손익률랭킹.csv", "text/csv")
+        st.divider()
+        stock_selector_popup("종목 상세 팝업", sorted(rank_view['종목명'].dropna().unique().tolist()), key="popup_tab6")
 
 
 # ════════════════════════════════════════
@@ -1166,6 +1318,8 @@ with tab7:
 
             csv_a = acc_summary[acc_disp_cols].to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
             st.download_button("📥 계좌별 손익 CSV", csv_a, "계좌별손익.csv", "text/csv")
+            st.divider()
+            stock_selector_popup("종목 상세 팝업", sorted(detail_pos['종목명'].dropna().unique().tolist()), key="popup_tab7")
 
 
 # ════════════════════════════════════════
@@ -1258,6 +1412,8 @@ with tab8:
 
         csv_eq = eq_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
         st.download_button("📥 수익곡선 CSV", csv_eq, "수익곡선.csv", "text/csv")
+        st.divider()
+        stock_selector_popup("종목 상세 팝업", sorted(combined_df['종목명'].dropna().unique().tolist()), key="popup_tab8")
 
 
 # ════════════════════════════════════════
@@ -1379,6 +1535,8 @@ with tab9:
         ).round(1).sort_values('평균보유기간', ascending=False).head(20)
         st.dataframe(sym_hold.style.format({'평균보유기간': '{:.1f}', '승률': '{:.1f}%'}),
                      use_container_width=True, height=300)
+        st.divider()
+        stock_selector_popup("종목 상세 팝업", sorted(combined_df['종목명'].dropna().unique().tolist()), key="popup_tab9")
 
 
 # ════════════════════════════════════════
