@@ -4,9 +4,90 @@ import plotly.graph_objects as go
 import re
 import json
 import io
-from datetime import date
+from datetime import date, datetime
 
 st.set_page_config(page_title="주식 종목별 손익 분석기", layout="wide")
+
+
+# ==========================================
+# pykrx 현재가 조회
+# ==========================================
+@st.cache_data(ttl=300, show_spinner=False)   # 5분 캐시
+def fetch_current_prices_pykrx(ticker_list: list[str]) -> dict[str, int]:
+    """
+    ticker_list: ['005930', '263750', ...]
+    반환: {'005930': 71400, '263750': 18500, ...}
+    오류 종목은 결과에서 제외.
+    """
+    try:
+        from pykrx import stock as krx
+    except ImportError:
+        return {}
+
+    result = {}
+    today_str = datetime.today().strftime("%Y%m%d")
+
+    for ticker in ticker_list:
+        if not ticker or len(ticker) != 6:
+            continue
+        try:
+            df = krx.get_market_ohlcv(today_str, today_str, ticker)
+            if df is None or df.empty:
+                # 장 개장 전이거나 휴장일이면 최근 5거래일 중 마지막 가격 사용
+                from datetime import timedelta
+                for delta in range(1, 6):
+                    prev = (datetime.today() - timedelta(days=delta)).strftime("%Y%m%d")
+                    df = krx.get_market_ohlcv(prev, prev, ticker)
+                    if df is not None and not df.empty:
+                        break
+            if df is not None and not df.empty:
+                result[ticker] = int(df['종가'].iloc[-1])
+        except Exception:
+            continue
+    return result
+
+
+@st.cache_data(ttl=3600, show_spinner=False)  # 종목 코드 목록은 1시간 캐시
+def get_krx_ticker_map() -> dict[str, str]:
+    """종목명 → 티커 매핑 (KOSPI + KOSDAQ 전체)."""
+    try:
+        from pykrx import stock as krx
+        today_str = datetime.today().strftime("%Y%m%d")
+        kospi  = krx.get_market_ticker_list(today_str, market="KOSPI")
+        kosdaq = krx.get_market_ticker_list(today_str, market="KOSDAQ")
+        name_to_ticker = {}
+        for t in kospi + kosdaq:
+            try:
+                name_to_ticker[krx.get_market_ticker_name(t)] = t
+            except Exception:
+                continue
+        return name_to_ticker
+    except Exception:
+        return {}
+
+
+def resolve_tickers(pos_df: pd.DataFrame) -> dict[str, str]:
+    """
+    positions_df 행들에서 종목키(종목명) → 6자리 티커 매핑 딕셔너리 반환.
+    종목코드6 컬럼이 있으면 우선 사용, 없으면 이름으로 조회.
+    """
+    mapping = {}  # 종목키 → 티커
+    name_map = get_krx_ticker_map()
+
+    for _, row in pos_df.iterrows():
+        key = row['종목키']
+        # 1) combined_df 에서 종목코드6 찾기
+        code6 = row.get('종목코드6', None)
+        if code6 and str(code6).strip() and len(str(code6).strip()) == 6:
+            mapping[key] = str(code6).strip()
+            continue
+        # 2) 종목명으로 KRX 전체 목록에서 검색
+        name = row['종목명']
+        ticker = name_map.get(name) or name_map.get(key)
+        if ticker:
+            mapping[key] = ticker
+    return mapping
+
 
 # ==========================================
 # 종목명 정규화
@@ -761,21 +842,120 @@ with tab1:
     if not show_all:
         disp_pos = disp_pos[disp_pos['잔고수량'] > 0].copy()
 
-    base_cols = ['종목명', '잔고수량', '평균단가', '보유원가', '실현손익', '누적매수수량', '누적매도수량']
-    fmt = {
-        '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '보유원가': '{:,.0f}',
-        '실현손익': '{:,.0f}', '누적매수수량': '{:,.0f}', '누적매도수량': '{:,.0f}',
-    }
+    # ── 현재가 조회 버튼 ──────────────────────────────────
+    holding_pos = disp_pos[disp_pos['잔고수량'] > 0].copy()
 
-    def highlight_holding(row):
-        return ['background-color:#1a3a5c; color:white'] * len(row) \
-            if row.get('잔고수량', 0) > 0 else [''] * len(row)
+    col_btn, col_status = st.columns([2, 8])
+    if col_btn.button("📡 현재가 조회 (pykrx)", type="primary", use_container_width=True):
+        with st.spinner("KRX에서 현재가를 가져오는 중..."):
+            try:
+                from pykrx import stock as _krx_test  # noqa: F401 — import 가능 여부 확인
+                # 보유 종목의 티커 매핑
+                # combined_df 에 종목코드6이 있을 경우 merge해서 가져옴
+                code_src = combined_df.drop_duplicates('종목키')[['종목키', '종목코드6']].copy() \
+                    if '종목코드6' in combined_df.columns else pd.DataFrame(columns=['종목키', '종목코드6'])
+                holding_merge = holding_pos.merge(code_src, on='종목키', how='left') \
+                    if not code_src.empty else holding_pos.assign(종목코드6=None)
 
-    st.dataframe(
-        disp_pos[base_cols].sort_values('실현손익', ascending=False)
-        .style.apply(highlight_holding, axis=1).format(fmt),
-        use_container_width=True, height=450
-    )
+                ticker_map = resolve_tickers(holding_merge)
+                tickers = list(ticker_map.values())
+                prices  = fetch_current_prices_pykrx.clear() or {}   # 캐시 무효화 후 재조회
+                fetch_current_prices_pykrx.clear()
+                prices  = fetch_current_prices_pykrx(tickers)
+
+                # 종목키 → 현재가
+                key_to_price = {k: prices.get(v) for k, v in ticker_map.items() if v in prices}
+                st.session_state['live_prices']      = key_to_price
+                st.session_state['live_prices_time'] = datetime.now().strftime("%H:%M:%S")
+                st.session_state['live_ticker_map']  = ticker_map
+                hit = sum(1 for v in key_to_price.values() if v)
+                col_status.success(f"✅ {hit}/{len(holding_pos)}개 종목 조회 완료 "
+                                   f"— {st.session_state['live_prices_time']} 기준")
+            except ImportError:
+                col_status.error("❌ pykrx가 설치되지 않았습니다. `pip install pykrx` 후 재시작하세요.")
+            except Exception as e:
+                col_status.error(f"❌ 조회 실패: {e}")
+    elif 'live_prices_time' in st.session_state:
+        col_status.caption(f"마지막 조회: {st.session_state['live_prices_time']} "
+                           f"(재조회하려면 버튼을 누르세요)")
+
+    # ── 테이블 구성 ─────────────────────────────────────
+    live_prices = st.session_state.get('live_prices', {})
+    disp_pos = disp_pos.copy()
+
+    if live_prices:
+        disp_pos['현재가']      = disp_pos['종목키'].map(live_prices)
+        disp_pos['평가금액']    = disp_pos.apply(
+            lambda r: int(r['현재가'] * r['잔고수량']) if pd.notna(r.get('현재가')) and r['잔고수량'] > 0 else None,
+            axis=1
+        )
+        disp_pos['미실현손익']  = disp_pos.apply(
+            lambda r: int((r['현재가'] - r['평균단가']) * r['잔고수량'])
+                      if pd.notna(r.get('현재가')) and r['평균단가'] > 0 and r['잔고수량'] > 0 else None,
+            axis=1
+        )
+        disp_pos['수익률(%)']   = disp_pos.apply(
+            lambda r: round((r['현재가'] - r['평균단가']) / r['평균단가'] * 100, 2)
+                      if pd.notna(r.get('현재가')) and r['평균단가'] > 0 and r['잔고수량'] > 0 else None,
+            axis=1
+        )
+        base_cols = ['종목명', '잔고수량', '평균단가', '현재가', '수익률(%)',
+                     '미실현손익', '평가금액', '보유원가', '실현손익']
+        fmt = {
+            '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '현재가': '{:,.0f}',
+            '보유원가': '{:,.0f}', '실현손익': '{:,.0f}',
+            '미실현손익': '{:,.0f}', '평가금액': '{:,.0f}', '수익률(%)': '{:+.2f}',
+        }
+
+        # ── 상단 요약 메트릭 (현재가 있을 때만)
+        holding_with_price = disp_pos[(disp_pos['잔고수량'] > 0) & disp_pos['미실현손익'].notna()]
+        if not holding_with_price.empty:
+            total_unrealized = holding_with_price['미실현손익'].sum()
+            total_eval       = holding_with_price['평가금액'].sum()
+            total_cost       = holding_with_price['보유원가'].sum()
+            total_return_pct = (total_unrealized / total_cost * 100) if total_cost else 0
+            lm1, lm2, lm3 = st.columns(3)
+            lm1.metric("미실현 평가손익 합계",
+                       f"₩{total_unrealized:,.0f}",
+                       delta=f"{total_return_pct:+.2f}%",
+                       delta_color="normal" if total_unrealized >= 0 else "inverse")
+            lm2.metric("총 평가금액", f"₩{total_eval:,.0f}")
+            lm3.metric("총 보유원가", f"₩{total_cost:,.0f}")
+            st.caption(f"※ 현재가 조회 {len(holding_with_price)}/{len(disp_pos[disp_pos['잔고수량']>0])}개 종목")
+
+    else:
+        base_cols = ['종목명', '잔고수량', '평균단가', '보유원가', '실현손익',
+                     '누적매수수량', '누적매도수량']
+        fmt = {
+            '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '보유원가': '{:,.0f}',
+            '실현손익': '{:,.0f}', '누적매수수량': '{:,.0f}', '누적매도수량': '{:,.0f}',
+        }
+
+    def highlight_pnl_row(row):
+        if row.get('잔고수량', 0) <= 0:
+            return [''] * len(row)
+        unr = row.get('미실현손익', None)
+        if unr is None or pd.isna(unr):
+            return ['background-color:#1a3a5c; color:white'] * len(row)
+        color = '#1a3a5c' if unr >= 0 else '#3a1a1a'
+        return [f'background-color:{color}; color:white'] * len(row)
+
+    def color_unrealized(val):
+        try:
+            v = float(val)
+            if v > 0:  return 'color:#ff6b6b; font-weight:bold'
+            if v < 0:  return 'color:#74b9ff; font-weight:bold'
+        except Exception:
+            pass
+        return ''
+
+    style_obj = disp_pos[base_cols].sort_values('잔고수량', ascending=False) \
+        .style.apply(highlight_pnl_row, axis=1).format(fmt, na_rep='-')
+    if '미실현손익' in base_cols:
+        style_obj = style_obj.map(color_unrealized, subset=['미실현손익', '수익률(%)'])
+
+    st.dataframe(style_obj, use_container_width=True, height=450)
+
     csv_bytes = disp_pos[base_cols].to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
     st.download_button("📥 잔고 CSV 다운로드", csv_bytes, "잔고현황.csv", "text/csv")
     st.divider()
@@ -2135,9 +2315,18 @@ with tab13:
                 cost_sc = float(pos_sc['보유원가'])
                 realized_sc = float(pos_sc['실현손익'])
 
+                # Tab1에서 조회한 현재가 자동 반영
+                _live  = st.session_state.get('live_prices', {})
+                _sym_k = pos_sc.get('종목키', normalize_stock_name(sel_sc))
+                _live_price = _live.get(_sym_k)
+                _default_price = int(_live_price) if _live_price else int(avg_sc)
+                if _live_price:
+                    st.caption(f"💡 현재가 {int(_live_price):,}원 자동 반영 "
+                               f"(Tab1 '현재가 조회' 기준 · {st.session_state.get('live_prices_time','')})")
+
                 sc1, sc2, sc3 = st.columns(3)
                 current_price = sc1.number_input("현재가 (원)", min_value=1,
-                                                  value=int(avg_sc), step=100, format="%d")
+                                                  value=_default_price, step=100, format="%d")
                 tp_pct_sim  = sc2.number_input("익절 목표 (%)", min_value=0.1, value=10.0, step=0.5)
                 sl_pct_sim  = sc3.number_input("손절 기준 (%)", min_value=0.1, value=5.0,  step=0.5)
 
