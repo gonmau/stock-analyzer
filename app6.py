@@ -881,10 +881,12 @@ with tab1:
                 st.session_state['live_prices_time'] = datetime.now().strftime("%H:%M:%S")
                 hit = len(key_to_price)
                 _col_msg.success(f"✅ {hit}/{len(_holding)}개 종목 조회 완료 — {st.session_state['live_prices_time']} 기준")
-            except ImportError:
-                _col_msg.error("❌ pykrx가 설치되지 않았습니다. requirements.txt에 pykrx 추가 후 재배포하세요.")
+            except ImportError as e:
+                _col_msg.error(f"❌ pykrx import 실패: {e}")
             except Exception as e:
+                import traceback
                 _col_msg.error(f"❌ 조회 실패: {e}")
+                st.exception(e)
     elif 'live_prices_time' in st.session_state:
         _col_msg.caption(f"마지막 조회: {st.session_state['live_prices_time']} (재조회하려면 버튼을 누르세요)")
 
