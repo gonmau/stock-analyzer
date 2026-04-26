@@ -3,4 +3,4 @@ pandas
 plotly
 openpyxl
 yfinance
-pykrx
+pykrx>=1.0.0
