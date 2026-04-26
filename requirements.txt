@@ -4,3 +4,4 @@ plotly
 openpyxl
 yfinance
 pykrx>=1.0.0
+setuptools
