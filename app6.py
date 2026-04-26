@@ -4,9 +4,70 @@ import plotly.graph_objects as go
 import re
 import json
 import io
-from datetime import date
+from datetime import date, datetime
 
 st.set_page_config(page_title="주식 종목별 손익 분석기", layout="wide")
+
+
+# ==========================================
+# pykrx 현재가 조회
+# ==========================================
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_current_prices_pykrx(ticker_list: tuple) -> dict:
+    """ticker tuple → {ticker: 현재가} dict. 5분 캐시."""
+    try:
+        from pykrx import stock as krx
+    except ImportError:
+        return {}
+    result = {}
+    today_str = datetime.today().strftime("%Y%m%d")
+    for ticker in ticker_list:
+        if not ticker or len(str(ticker)) != 6:
+            continue
+        try:
+            df = krx.get_market_ohlcv(today_str, today_str, ticker)
+            if df is None or df.empty:
+                from datetime import timedelta
+                for d in range(1, 6):
+                    prev = (datetime.today() - timedelta(days=d)).strftime("%Y%m%d")
+                    df = krx.get_market_ohlcv(prev, prev, ticker)
+                    if df is not None and not df.empty:
+                        break
+            if df is not None and not df.empty:
+                result[ticker] = int(df['종가'].iloc[-1])
+        except Exception:
+            continue
+    return result
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_krx_ticker_map() -> dict:
+    """종목명 → 티커 전체 매핑. 1시간 캐시."""
+    try:
+        from pykrx import stock as krx
+        today_str = datetime.today().strftime("%Y%m%d")
+        tickers = krx.get_market_ticker_list(today_str, market="KOSPI") + \
+                  krx.get_market_ticker_list(today_str, market="KOSDAQ")
+        return {krx.get_market_ticker_name(t): t for t in tickers}
+    except Exception:
+        return {}
+
+
+def resolve_tickers(holding_df: pd.DataFrame) -> dict:
+    """종목키 → 티커. 종목코드6 우선, 없으면 종목명으로 KRX 검색."""
+    name_map = get_krx_ticker_map()
+    mapping = {}
+    for _, row in holding_df.iterrows():
+        key = row['종목키']
+        code6 = str(row.get('종목코드6', '') or '').strip()
+        if len(code6) == 6 and code6.isdigit():
+            mapping[key] = code6
+            continue
+        ticker = name_map.get(row['종목명']) or name_map.get(key)
+        if ticker:
+            mapping[key] = ticker
+    return mapping
+
 
 # ==========================================
 # 종목명 정규화
@@ -97,26 +158,18 @@ if 'manual_trades' not in st.session_state:
 
 
 def _load_default_exclude() -> str:
-    """
-    영구 기본 제외종목 로드 순서:
-    1) Streamlit Cloud Secrets  →  [DEFAULT_EXCLUDE_SYMBOLS]
-    2) 레포 루트  exclude_default.txt
-    3) 없으면 빈 문자열
-    """
-    # 1. Secrets
+    """영구 기본 제외종목 로드: Secrets → exclude_default.txt → 빈 문자열 순서."""
     try:
         val = st.secrets.get("DEFAULT_EXCLUDE_SYMBOLS", "")
         if val and str(val).strip():
             return str(val).strip()
     except Exception:
         pass
-    # 2. 파일
     try:
         import os
         path = os.path.join(os.path.dirname(__file__), "exclude_default.txt")
         if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                content = f.read().strip()
+            content = open(path, encoding="utf-8").read().strip()
             if content:
                 return content
     except Exception:
@@ -124,11 +177,11 @@ def _load_default_exclude() -> str:
     return ""
 
 
-# 앱 최초 실행 시에만 기본 제외종목을 session_state에 주입
-if 'exclude_symbols_text' not in st.session_state:
-    default_excl = _load_default_exclude()
-    if default_excl:
-        st.session_state['exclude_symbols_text'] = default_excl
+# 앱 최초 기동 시 기본값 주입 (_shadow 키 사용 — 위젯 key 직접 수정 금지)
+if '_excl_shadow' not in st.session_state:
+    st.session_state['_excl_shadow'] = _load_default_exclude()
+if '_buy_first_shadow' not in st.session_state:
+    st.session_state['_buy_first_shadow'] = True
 
 
 # ==========================================
@@ -432,6 +485,19 @@ def build_backup_excel():
     buf.seek(0)
     return buf.read()
 
+def _apply_settings_to_shadow(exclude_val: str | None, buy_first_val: bool | None):
+    """
+    복원 시 위젯 key를 직접 건드리지 않고 shadow 키에 쓴 뒤
+    위젯 key 자체를 session_state에서 제거 → 다음 rerun에서 value= 로 재초기화.
+    """
+    if exclude_val is not None:
+        st.session_state['_excl_shadow'] = exclude_val
+        st.session_state.pop('exclude_symbols_text', None)   # 위젯 강제 재초기화
+    if buy_first_val is not None:
+        st.session_state['_buy_first_shadow'] = buy_first_val
+        st.session_state.pop('opt_same_day_buy_first', None) # 위젯 강제 재초기화
+
+
 def restore_from_json(uploaded):
     try:
         data = json.load(uploaded)
@@ -441,16 +507,13 @@ def restore_from_json(uploaded):
             st.session_state.master_df = df
         if 'manual_trades' in data:
             st.session_state.manual_trades = data['manual_trades']
-        if 'exclude_symbols_text' in data:
-            new_val = str(data.get('exclude_symbols_text') or '')
-            st.session_state['exclude_symbols_text'] = new_val
-            # 위젯 key를 교체해 강제 재렌더링
-            st.session_state['_excl_widget_ver'] = st.session_state.get('_excl_widget_ver', 0) + 1
-        if 'opt_same_day_buy_first' in data:
-            st.session_state['opt_same_day_buy_first'] = bool(data['opt_same_day_buy_first'])
+        excl = str(data['exclude_symbols_text'] or '') if 'exclude_symbols_text' in data else None
+        buy  = bool(data['opt_same_day_buy_first']) if 'opt_same_day_buy_first' in data else None
+        _apply_settings_to_shadow(excl, buy)
         return True, "JSON 복원 완료 (설정·제외목록 포함)"
     except Exception as e:
         return False, str(e)
+
 
 def restore_from_excel(uploaded):
     try:
@@ -462,6 +525,7 @@ def restore_from_excel(uploaded):
         if '수동입력' in xls.sheet_names:
             manual_df = pd.read_excel(xls, sheet_name='수동입력')
             st.session_state.manual_trades = manual_df.to_dict(orient='records')
+        excl, buy = None, None
         if '설정' in xls.sheet_names:
             sdf = pd.read_excel(xls, sheet_name='설정')
             if len(sdf.columns) >= 2:
@@ -470,13 +534,10 @@ def restore_from_excel(uploaded):
                     k = str(row.get(col0, '')).strip()
                     v = row.get(col1, '')
                     if k == 'exclude_symbols_text':
-                        new_val = '' if pd.isna(v) else str(v)
-                        st.session_state['exclude_symbols_text'] = new_val
-                        st.session_state['_excl_widget_ver'] = st.session_state.get('_excl_widget_ver', 0) + 1
+                        excl = '' if pd.isna(v) else str(v)
                     elif k == 'opt_same_day_buy_first':
-                        st.session_state['opt_same_day_buy_first'] = str(v).strip().upper() in (
-                            'TRUE', '1', 'YES', 'Y'
-                        )
+                        buy = str(v).strip().upper() in ('TRUE', '1', 'YES', 'Y')
+        _apply_settings_to_shadow(excl, buy)
         return True, "Excel 복원 완료 (설정·제외목록 포함)"
     except Exception as e:
         return False, str(e)
@@ -523,21 +584,17 @@ with st.sidebar:
     st.header("📂 거래내역 파일 업로드")
     st.checkbox(
         "체결시각 없음: 동일 거래일·동일 종목은 매수를 먼저 처리 (입금일/일자별 원장용)",
-        value=st.session_state.get('opt_same_day_buy_first', True),
+        value=st.session_state.get('_buy_first_shadow', True),
         key="opt_same_day_buy_first",
         help="증권사 엑셀에 체결시각이 없을 때, 당일 표에서 매도가 매수보다 위에 있어도 잔고 계산상으로는 매수를 먼저 반영합니다.",
     )
-    _excl_ver = st.session_state.get('_excl_widget_ver', 0)
     st.text_area(
         "잔고 계산에서 제외할 종목 (한 줄에 하나)",
-        value=st.session_state.get('exclude_symbols_text', ''),
+        value=st.session_state.get('_excl_shadow', ''),
         height=88,
-        key=f"exclude_symbols_text_w{_excl_ver}",
+        key="exclude_symbols_text",
         placeholder="미래드림타겟주식A\n한진해운\n로코조이",
         help="펀드·상폐 등 원장과 맞출 수 없는 종목명을 적으면 해당 종목 거래는 집계에서 빠집니다. (수동 입력도 같은 이름이면 함께 제외)",
-        on_change=lambda: st.session_state.update(
-            exclude_symbols_text=st.session_state.get(f"exclude_symbols_text_w{_excl_ver}", '')
-        ),
     )
     st.caption(
         "체결일 ≠ 입금일: 엑셀에 없는 매도(예 삼성전자 4·16 매도입금만 반영)는 "
@@ -805,21 +862,107 @@ with tab1:
     if not show_all:
         disp_pos = disp_pos[disp_pos['잔고수량'] > 0].copy()
 
-    base_cols = ['종목명', '잔고수량', '평균단가', '보유원가', '실현손익', '누적매수수량', '누적매도수량']
-    fmt = {
-        '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '보유원가': '{:,.0f}',
-        '실현손익': '{:,.0f}', '누적매수수량': '{:,.0f}', '누적매도수량': '{:,.0f}',
-    }
+    # ── 현재가 조회 버튼 ──
+    _col_btn, _col_msg = st.columns([2, 8])
+    if _col_btn.button("📡 현재가 조회 (pykrx)", type="primary", use_container_width=True):
+        with st.spinner("KRX에서 현재가를 가져오는 중..."):
+            try:
+                from pykrx import stock as _krx_chk  # noqa
+                _holding = disp_pos[disp_pos['잔고수량'] > 0].copy()
+                # combined_df 에서 종목코드6 merge
+                if '종목코드6' in combined_df.columns:
+                    _code_src = combined_df.drop_duplicates('종목키')[['종목키', '종목코드6']]
+                    _holding  = _holding.merge(_code_src, on='종목키', how='left')
+                ticker_map  = resolve_tickers(_holding)
+                fetch_current_prices_pykrx.clear()
+                prices      = fetch_current_prices_pykrx(tuple(ticker_map.values()))
+                key_to_price = {k: prices[v] for k, v in ticker_map.items() if v in prices}
+                st.session_state['live_prices']      = key_to_price
+                st.session_state['live_prices_time'] = datetime.now().strftime("%H:%M:%S")
+                hit = len(key_to_price)
+                _col_msg.success(f"✅ {hit}/{len(_holding)}개 종목 조회 완료 — {st.session_state['live_prices_time']} 기준")
+            except ImportError:
+                _col_msg.error("❌ pykrx가 설치되지 않았습니다. requirements.txt에 pykrx 추가 후 재배포하세요.")
+            except Exception as e:
+                _col_msg.error(f"❌ 조회 실패: {e}")
+    elif 'live_prices_time' in st.session_state:
+        _col_msg.caption(f"마지막 조회: {st.session_state['live_prices_time']} (재조회하려면 버튼을 누르세요)")
 
-    def highlight_holding(row):
-        return ['background-color:#1a3a5c; color:white'] * len(row) \
-            if row.get('잔고수량', 0) > 0 else [''] * len(row)
+    # ── 테이블 구성 ──
+    _live = st.session_state.get('live_prices', {})
+    disp_pos = disp_pos.copy()
 
-    st.dataframe(
-        disp_pos[base_cols].sort_values('실현손익', ascending=False)
-        .style.apply(highlight_holding, axis=1).format(fmt),
-        use_container_width=True, height=450
-    )
+    if _live:
+        disp_pos['현재가']     = disp_pos['종목키'].map(_live)
+        disp_pos['미실현손익'] = disp_pos.apply(
+            lambda r: int((r['현재가'] - r['평균단가']) * r['잔고수량'])
+                      if pd.notna(r.get('현재가')) and r['평균단가'] > 0 and r['잔고수량'] > 0 else None, axis=1)
+        disp_pos['수익률(%)']  = disp_pos.apply(
+            lambda r: round((r['현재가'] - r['평균단가']) / r['평균단가'] * 100, 2)
+                      if pd.notna(r.get('현재가')) and r['평균단가'] > 0 and r['잔고수량'] > 0 else None, axis=1)
+        disp_pos['평가금액']   = disp_pos.apply(
+            lambda r: int(r['현재가'] * r['잔고수량'])
+                      if pd.notna(r.get('현재가')) and r['잔고수량'] > 0 else None, axis=1)
+
+        # 요약 메트릭
+        _hp = disp_pos[(disp_pos['잔고수량'] > 0) & disp_pos['미실현손익'].notna()]
+        if not _hp.empty:
+            _unr  = _hp['미실현손익'].sum()
+            _cost = _hp['보유원가'].sum()
+            _m1, _m2, _m3 = st.columns(3)
+            _m1.metric("미실현 평가손익", f"₩{_unr:,.0f}",
+                       delta=f"{_unr/_cost*100:+.2f}%" if _cost else None,
+                       delta_color="normal" if _unr >= 0 else "inverse")
+            _m2.metric("총 평가금액",  f"₩{_hp['평가금액'].sum():,.0f}")
+            _m3.metric("총 보유원가",  f"₩{_cost:,.0f}")
+
+        base_cols = ['종목명', '잔고수량', '평균단가', '현재가', '수익률(%)', '미실현손익', '평가금액', '보유원가', '실현손익']
+        fmt = {
+            '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '현재가': '{:,.0f}',
+            '보유원가': '{:,.0f}', '실현손익': '{:,.0f}',
+            '미실현손익': '{:,.0f}', '평가금액': '{:,.0f}', '수익률(%)': '{:+.2f}',
+        }
+
+        def _color_pnl_cell(val):
+            try:
+                v = float(val)
+                if v > 0: return 'color:#ff6b6b;font-weight:bold'
+                if v < 0: return 'color:#74b9ff;font-weight:bold'
+            except Exception:
+                pass
+            return ''
+
+        def highlight_holding(row):
+            if row.get('잔고수량', 0) <= 0:
+                return [''] * len(row)
+            unr = row.get('미실현손익', None)
+            bg  = '#1a3a5c' if (unr is None or pd.isna(unr) or float(unr) >= 0) else '#3a1a1a'
+            return [f'background-color:{bg};color:white'] * len(row)
+
+        st.dataframe(
+            disp_pos[base_cols].sort_values('잔고수량', ascending=False)
+            .style.apply(highlight_holding, axis=1)
+            .map(_color_pnl_cell, subset=['미실현손익', '수익률(%)'])
+            .format(fmt, na_rep='-'),
+            use_container_width=True, height=450
+        )
+
+    else:
+        base_cols = ['종목명', '잔고수량', '평균단가', '보유원가', '실현손익', '누적매수수량', '누적매도수량']
+        fmt = {
+            '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '보유원가': '{:,.0f}',
+            '실현손익': '{:,.0f}', '누적매수수량': '{:,.0f}', '누적매도수량': '{:,.0f}',
+        }
+
+        def highlight_holding(row):
+            return ['background-color:#1a3a5c; color:white'] * len(row) \
+                if row.get('잔고수량', 0) > 0 else [''] * len(row)
+
+        st.dataframe(
+            disp_pos[base_cols].sort_values('실현손익', ascending=False)
+            .style.apply(highlight_holding, axis=1).format(fmt),
+            use_container_width=True, height=450
+        )
     csv_bytes = disp_pos[base_cols].to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
     st.download_button("📥 잔고 CSV 다운로드", csv_bytes, "잔고현황.csv", "text/csv")
     st.divider()
