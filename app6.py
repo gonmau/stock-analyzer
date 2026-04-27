@@ -260,14 +260,15 @@ def resolve_tickers_yf(holding_df: pd.DataFrame) -> dict:
         key   = row['종목키']
         code6 = str(row.get('종목코드6', '') or '').strip()
         name  = row.get('종목명', key)
+        norm  = normalize_stock_name(name)   # '펄어비스보통주' → '펄어비스' 등
         if len(code6) == 6 and code6.isdigit():
             candidates[key] = _code_to_yf(code6)
         elif name in _YF_NAME_MAP:
-            t = _YF_NAME_MAP[name]
-            candidates[key] = [t] if _is_us_ticker(t) else [t]
+            candidates[key] = [_YF_NAME_MAP[name]]
+        elif norm in _YF_NAME_MAP:
+            candidates[key] = [_YF_NAME_MAP[norm]]
         elif key in _YF_NAME_MAP:
-            t = _YF_NAME_MAP[key]
-            candidates[key] = [t]
+            candidates[key] = [_YF_NAME_MAP[key]]
 
     # 2단계: 후보 티커 전체를 한 번에 yfinance 조회
     all_candidates = list({t for tl in candidates.values() for t in tl})
