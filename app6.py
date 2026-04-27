@@ -251,18 +251,27 @@ def fetch_current_prices_yf(yf_tickers: tuple) -> dict:
 def resolve_tickers_yf(holding_df: pd.DataFrame) -> dict:
     """
     종목키 → yfinance 티커 매핑.
-    우선순위: 종목코드6(있으면 KS/KQ 둘 다 시도) → _YF_NAME_MAP → 못 찾으면 제외.
-    반환: {종목키: 'XXXXXX.KS'}  (실제 유효한 것만)
+    우선순위: 사용자 정의 매핑 → 종목코드6 → _YF_NAME_MAP → 못 찾으면 제외.
     """
-    # 1단계: 코드6 있는 종목만 우선 일괄 조회
-    candidates: dict[str, list[str]] = {}  # 종목키 → [후보 티커들]
+    user_map = st.session_state.get('_user_ticker_map', {})
+    candidates: dict[str, list[str]] = {}
     for _, row in holding_df.iterrows():
         key   = row['종목키']
         code6 = str(row.get('종목코드6', '') or '').strip()
         name  = row.get('종목명', key)
-        norm  = normalize_stock_name(name)   # '펄어비스보통주' → '펄어비스' 등
-        if len(code6) == 6 and code6.isdigit():
+        norm  = normalize_stock_name(name)
+
+        # 1순위: 사용자 정의 매핑
+        if name in user_map:
+            candidates[key] = [user_map[name]]
+        elif norm in user_map:
+            candidates[key] = [user_map[norm]]
+        elif key in user_map:
+            candidates[key] = [user_map[key]]
+        # 2순위: 종목코드6
+        elif len(code6) == 6 and code6.isdigit():
             candidates[key] = _code_to_yf(code6)
+        # 3순위: 내장 매핑
         elif name in _YF_NAME_MAP:
             candidates[key] = [_YF_NAME_MAP[name]]
         elif norm in _YF_NAME_MAP:
@@ -397,6 +406,8 @@ if '_excl_shadow' not in st.session_state:
     st.session_state['_excl_shadow'] = _load_default_exclude()
 if '_buy_first_shadow' not in st.session_state:
     st.session_state['_buy_first_shadow'] = True
+if '_user_ticker_map' not in st.session_state:
+    st.session_state['_user_ticker_map'] = {}   # {'종목명': 'XXXXXX.KQ'}
 
 
 # ==========================================
@@ -669,6 +680,7 @@ def build_backup_json():
         'manual_trades': st.session_state.get('manual_trades', []),
         'exclude_symbols_text': st.session_state.get('exclude_symbols_text', '') or '',
         'opt_same_day_buy_first': bool(st.session_state.get('opt_same_day_buy_first', True)),
+        'user_ticker_map': st.session_state.get('_user_ticker_map', {}),
     }
     if 'master_df' in st.session_state:
         df = st.session_state.master_df.copy()
@@ -697,6 +709,10 @@ def build_backup_excel():
             ],
         })
         settings_df.to_excel(writer, sheet_name='설정', index=False)
+        # 사용자 티커 매핑
+        utm = st.session_state.get('_user_ticker_map', {})
+        pd.DataFrame({'종목명': list(utm.keys()), '티커': list(utm.values())}).to_excel(
+            writer, sheet_name='티커매핑', index=False)
     buf.seek(0)
     return buf.read()
 
@@ -725,7 +741,9 @@ def restore_from_json(uploaded):
         excl = str(data['exclude_symbols_text'] or '') if 'exclude_symbols_text' in data else None
         buy  = bool(data['opt_same_day_buy_first']) if 'opt_same_day_buy_first' in data else None
         _apply_settings_to_shadow(excl, buy)
-        return True, "JSON 복원 완료 (설정·제외목록 포함)"
+        if 'user_ticker_map' in data and isinstance(data['user_ticker_map'], dict):
+            st.session_state['_user_ticker_map'] = data['user_ticker_map']
+        return True, "JSON 복원 완료 (설정·제외목록·티커매핑 포함)"
     except Exception as e:
         return False, str(e)
 
@@ -753,7 +771,13 @@ def restore_from_excel(uploaded):
                     elif k == 'opt_same_day_buy_first':
                         buy = str(v).strip().upper() in ('TRUE', '1', 'YES', 'Y')
         _apply_settings_to_shadow(excl, buy)
-        return True, "Excel 복원 완료 (설정·제외목록 포함)"
+        if '티커매핑' in xls.sheet_names:
+            tdf = pd.read_excel(xls, sheet_name='티커매핑')
+            if '종목명' in tdf.columns and '티커' in tdf.columns:
+                st.session_state['_user_ticker_map'] = dict(
+                    zip(tdf['종목명'].astype(str), tdf['티커'].astype(str))
+                )
+        return True, "Excel 복원 완료 (설정·제외목록·티커매핑 포함)"
     except Exception as e:
         return False, str(e)
 
@@ -811,6 +835,41 @@ with st.sidebar:
         placeholder="미래드림타겟주식A\n한진해운\n로코조이",
         help="펀드·상폐 등 원장과 맞출 수 없는 종목명을 적으면 해당 종목 거래는 집계에서 빠집니다. (수동 입력도 같은 이름이면 함께 제외)",
     )
+
+    # ── 사용자 정의 티커 매핑 ──────────────────────────
+    st.divider()
+    st.subheader("🔗 현재가 조회 티커 직접 입력")
+    st.caption("내장 코드에 없는 종목은 여기에 추가하세요. 종목명은 거래내역과 동일하게 입력.")
+
+    utm = st.session_state.get('_user_ticker_map', {})
+
+    # 기존 매핑 표시 + 삭제
+    if utm:
+        to_delete = []
+        for name, ticker in list(utm.items()):
+            c1, c2, c3 = st.columns([4, 3, 1])
+            c1.text(name)
+            c2.text(ticker)
+            if c3.button("✕", key=f"del_ticker_{name}", help="삭제"):
+                to_delete.append(name)
+        for name in to_delete:
+            del st.session_state['_user_ticker_map'][name]
+        if to_delete:
+            st.rerun()
+
+    # 신규 추가
+    with st.form("add_ticker_form", clear_on_submit=True):
+        fc1, fc2 = st.columns(2)
+        new_name   = fc1.text_input("종목명", placeholder="한국항공우주산업보통")
+        new_ticker = fc2.text_input("티커", placeholder="047810.KS")
+        if st.form_submit_button("추가", use_container_width=True):
+            n = new_name.strip()
+            t = new_ticker.strip()
+            if n and t:
+                st.session_state['_user_ticker_map'][n] = t
+                st.rerun()
+            else:
+                st.warning("종목명과 티커를 모두 입력하세요.")
     st.caption(
         "체결일 ≠ 입금일: 엑셀에 없는 매도(예 삼성전자 4·16 매도입금만 반영)는 "
         "「수동 거래 입력」에서 체결일 기준으로 매도를 추가하세요."
