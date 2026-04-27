@@ -10,62 +10,114 @@ st.set_page_config(page_title="주식 종목별 손익 분석기", layout="wide"
 
 
 # ==========================================
-# pykrx 현재가 조회
+# yfinance 현재가 조회
 # ==========================================
+
+# 종목명 → yfinance 티커 수동 매핑 테이블
+# 거래내역에 종목코드6이 없을 때 이름으로 fallback
+_YF_NAME_MAP: dict[str, str] = {
+    # KOSPI (.KS)
+    '삼성전자':     '005930.KS',
+    'SK하이닉스':   '000660.KS',
+    'LG전자':       '066570.KS',
+    'SK':           '034730.KS',
+    '대우건설':     '047040.KS',
+    '대웅제약':     '069620.KS',
+    '두산에너빌리티':'034020.KS',
+    '현대건설':     '000720.KS',
+    '한국전력공사': '015760.KS',
+    '현대자동차':   '005380.KS',
+    '케이티앤지':   '033780.KS',
+    '아시아나항공': '020560.KS',
+    '한국항공우주': '047810.KS',
+    '진원생명과학': '011000.KS',
+    'LG이노텍':     '011070.KS',
+    '후성':         '093370.KS',
+    # KOSDAQ (.KQ)
+    '안랩':         '053800.KQ',
+    '카카오':       '035720.KQ',
+    '넷마블':       '251270.KQ',
+    '텔콘RF제약':   '200230.KQ',
+    '두산로보틱스': '454910.KQ',
+    '제일약품':     '271980.KQ',
+    '지누스':       '013890.KQ',
+    '에이프로젠HG': '239610.KQ',
+}
+
+# KOSPI/KOSDAQ 판별: 간단히 코드 앞자리로 구분 (완전하진 않지만 실용적)
+_KOSDAQ_PREFIXES = ('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')
+
+def _code_to_yf(code6: str) -> list[str]:
+    """6자리 종목코드 → yfinance 티커 후보 리스트 (KS 먼저, KQ 두 번째)."""
+    return [f"{code6}.KS", f"{code6}.KQ"]
+
+
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_current_prices_pykrx(ticker_list: tuple) -> dict:
-    """ticker tuple → {ticker: 현재가} dict. 5분 캐시."""
-    try:
-        from pykrx import stock as krx
-    except ImportError:
+def fetch_current_prices_yf(yf_tickers: tuple) -> dict:
+    """
+    yf_tickers: ('005930.KS', '263750.KQ', ...)
+    반환: {'005930.KS': 71400, '263750.KQ': 18500, ...}
+    5분 캐시.
+    """
+    import yfinance as yf
+    if not yf_tickers:
         return {}
-    result = {}
-    today_str = datetime.today().strftime("%Y%m%d")
-    for ticker in ticker_list:
-        if not ticker or len(str(ticker)) != 6:
-            continue
-        try:
-            df = krx.get_market_ohlcv(today_str, today_str, ticker)
-            if df is None or df.empty:
-                from datetime import timedelta
-                for d in range(1, 6):
-                    prev = (datetime.today() - timedelta(days=d)).strftime("%Y%m%d")
-                    df = krx.get_market_ohlcv(prev, prev, ticker)
-                    if df is not None and not df.empty:
-                        break
-            if df is not None and not df.empty:
-                result[ticker] = int(df['종가'].iloc[-1])
-        except Exception:
-            continue
-    return result
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_krx_ticker_map() -> dict:
-    """종목명 → 티커 전체 매핑. 1시간 캐시."""
     try:
-        from pykrx import stock as krx
-        today_str = datetime.today().strftime("%Y%m%d")
-        tickers = krx.get_market_ticker_list(today_str, market="KOSPI") + \
-                  krx.get_market_ticker_list(today_str, market="KOSDAQ")
-        return {krx.get_market_ticker_name(t): t for t in tickers}
+        data = yf.download(
+            list(yf_tickers),
+            period="5d",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+        )
+        prices = {}
+        close = data.get('Close', data) if isinstance(data.columns, pd.MultiIndex) else data
+        for ticker in yf_tickers:
+            try:
+                if isinstance(close.columns, pd.MultiIndex):
+                    col = ('Close', ticker)
+                    series = close[col].dropna() if col in close.columns else pd.Series(dtype=float)
+                else:
+                    series = close[ticker].dropna() if ticker in close.columns else pd.Series(dtype=float)
+                if not series.empty:
+                    prices[ticker] = int(series.iloc[-1])
+            except Exception:
+                continue
+        return prices
     except Exception:
         return {}
 
 
-def resolve_tickers(holding_df: pd.DataFrame) -> dict:
-    """종목키 → 티커. 종목코드6 우선, 없으면 종목명으로 KRX 검색."""
-    name_map = get_krx_ticker_map()
-    mapping = {}
+def resolve_tickers_yf(holding_df: pd.DataFrame) -> dict:
+    """
+    종목키 → yfinance 티커 매핑.
+    우선순위: 종목코드6(있으면 KS/KQ 둘 다 시도) → _YF_NAME_MAP → 못 찾으면 제외.
+    반환: {종목키: 'XXXXXX.KS'}  (실제 유효한 것만)
+    """
+    # 1단계: 코드6 있는 종목만 우선 일괄 조회
+    candidates: dict[str, list[str]] = {}  # 종목키 → [후보 티커들]
     for _, row in holding_df.iterrows():
-        key = row['종목키']
+        key   = row['종목키']
         code6 = str(row.get('종목코드6', '') or '').strip()
+        name  = row.get('종목명', key)
         if len(code6) == 6 and code6.isdigit():
-            mapping[key] = code6
-            continue
-        ticker = name_map.get(row['종목명']) or name_map.get(key)
-        if ticker:
-            mapping[key] = ticker
+            candidates[key] = _code_to_yf(code6)
+        elif name in _YF_NAME_MAP:
+            candidates[key] = [_YF_NAME_MAP[name]]
+        elif key in _YF_NAME_MAP:
+            candidates[key] = [_YF_NAME_MAP[key]]
+
+    # 2단계: 후보 티커 전체를 한 번에 yfinance 조회
+    all_candidates = list({t for tl in candidates.values() for t in tl})
+    prices = fetch_current_prices_yf(tuple(all_candidates))
+
+    # 3단계: 유효한(가격이 있는) 티커 선택
+    mapping: dict[str, str] = {}
+    for key, ticker_list in candidates.items():
+        for t in ticker_list:
+            if t in prices:
+                mapping[key] = t
+                break
     return mapping
 
 
@@ -864,27 +916,32 @@ with tab1:
 
     # ── 현재가 조회 버튼 ──
     _col_btn, _col_msg = st.columns([2, 8])
-    if _col_btn.button("📡 현재가 조회 (pykrx)", type="primary", use_container_width=True):
-        with st.spinner("KRX에서 현재가를 가져오는 중..."):
+    if _col_btn.button("📡 현재가 조회 (실시간)", type="primary", use_container_width=True):
+        with st.spinner("현재가를 가져오는 중..."):
             try:
-                from pykrx import stock as _krx_chk  # noqa
+                import yfinance as _yf_chk  # noqa
                 _holding = disp_pos[disp_pos['잔고수량'] > 0].copy()
-                # combined_df 에서 종목코드6 merge
                 if '종목코드6' in combined_df.columns:
                     _code_src = combined_df.drop_duplicates('종목키')[['종목키', '종목코드6']]
                     _holding  = _holding.merge(_code_src, on='종목키', how='left')
-                ticker_map  = resolve_tickers(_holding)
-                fetch_current_prices_pykrx.clear()
-                prices      = fetch_current_prices_pykrx(tuple(ticker_map.values()))
-                key_to_price = {k: prices[v] for k, v in ticker_map.items() if v in prices}
-                st.session_state['live_prices']      = key_to_price
-                st.session_state['live_prices_time'] = datetime.now().strftime("%H:%M:%S")
-                hit = len(key_to_price)
-                _col_msg.success(f"✅ {hit}/{len(_holding)}개 종목 조회 완료 — {st.session_state['live_prices_time']} 기준")
+                ticker_map = resolve_tickers_yf(_holding)
+                if not ticker_map:
+                    _col_msg.warning("⚠️ 조회 가능한 종목이 없습니다. 거래내역에 종목코드6 컬럼이 있는지 확인하세요.")
+                else:
+                    fetch_current_prices_yf.clear()
+                    prices     = fetch_current_prices_yf(tuple(set(ticker_map.values())))
+                    key_to_price = {k: prices[v] for k, v in ticker_map.items() if v in prices}
+                    st.session_state['live_prices']      = key_to_price
+                    st.session_state['live_prices_time'] = datetime.now().strftime("%H:%M:%S")
+                    hit  = len(key_to_price)
+                    miss = len(_holding) - hit
+                    msg  = f"✅ {hit}/{len(_holding)}개 종목 조회 완료 — {st.session_state['live_prices_time']} 기준"
+                    if miss:
+                        msg += f"  (미조회 {miss}개: 종목코드6 없거나 상폐 등)"
+                    _col_msg.success(msg)
             except ImportError as e:
-                _col_msg.error(f"❌ pykrx import 실패: {e}")
+                _col_msg.error(f"❌ yfinance import 실패: {e}")
             except Exception as e:
-                import traceback
                 _col_msg.error(f"❌ 조회 실패: {e}")
                 st.exception(e)
     elif 'live_prices_time' in st.session_state:
