@@ -1308,7 +1308,153 @@ with tab1:
     csv_bytes = disp_pos[base_cols].to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
     st.download_button("📥 잔고 CSV 다운로드", csv_bytes, "잔고현황.csv", "text/csv")
     st.divider()
-    stock_selector_popup("종목 상세 팝업", sorted(disp_pos['종목명'].dropna().unique().tolist()), key="popup_tab1")
+
+    # ── 종목 클릭 → 인라인 상세 ──────────────────────────
+    _stock_names = sorted(disp_pos['종목명'].dropna().unique().tolist())
+    _sel_inline  = st.selectbox("🔍 종목 선택 → 전체 거래내역 + 로트별 손익",
+                                ["-- 종목 선택 --"] + _stock_names,
+                                key="tab1_inline_stock")
+
+    if _sel_inline and _sel_inline != "-- 종목 선택 --":
+        _sym_key   = combined_df[combined_df['종목명'] == _sel_inline]['종목키'].iloc[0]
+        _det_df    = calculate_trade_detail(combined_df, _sym_key)
+        _pos_inline = positions_df[positions_df['종목키'] == _sym_key]
+        _lp_inline  = st.session_state.get('live_prices', {}).get(_sym_key)
+        _ltime_inline = st.session_state.get('live_prices_time', '')
+
+        with st.container(border=True):
+            # ── 상단 요약 메트릭 ──
+            if not _pos_inline.empty:
+                _pi   = _pos_inline.iloc[0]
+                _avg_i = float(_pi['평균단가'])
+                _qty_i = float(_pi['잔고수량'])
+
+                if _lp_inline and _qty_i > 0:
+                    _unr_i   = int((_lp_inline - _avg_i) * _qty_i)
+                    _ret_i   = (_lp_inline - _avg_i) / _avg_i * 100 if _avg_i > 0 else 0
+                    _fb_i    = _det_df[_det_df['매매유형'] == 'BUY']['거래일자'].min()
+                    _hdays_i = (pd.Timestamp(datetime.today().date()) - _fb_i).days if pd.notna(_fb_i) else 0
+                    st.caption(f"**{_sel_inline}** · 현재가 기준 {_ltime_inline}")
+                    _mc1, _mc2, _mc3, _mc4, _mc5, _mc6, _mc7 = st.columns(7)
+                    _mc1.metric("실현손익",   f"₩{_pi['실현손익']:,.0f}")
+                    _mc2.metric("잔고수량",   f"{_qty_i:,.0f}주")
+                    _mc3.metric("평균단가",   f"₩{_avg_i:,.0f}")
+                    _mc4.metric("현재가",     f"₩{_lp_inline:,.0f}",
+                                delta=f"{_ret_i:+.2f}%",
+                                delta_color="normal" if _unr_i >= 0 else "inverse")
+                    _mc5.metric("미실현손익", f"₩{_unr_i:,.0f}",
+                                delta=f"{_ret_i:+.2f}%",
+                                delta_color="normal" if _unr_i >= 0 else "inverse")
+                    _mc6.metric("평가금액",   f"₩{int(_lp_inline * _qty_i):,.0f}")
+                    _mc7.metric("보유일수",   f"{_hdays_i:,}일",
+                                delta=f"최초 {str(_fb_i)[:10]}", delta_color="off")
+                else:
+                    if _qty_i > 0:
+                        st.caption(f"**{_sel_inline}** · 현재가 조회 전 (위 '📡 현재가 조회' 버튼 누르면 손익 표시)")
+                    _mc1, _mc2, _mc3, _mc4, _mc5 = st.columns(5)
+                    _mc1.metric("실현손익", f"₩{_pi['실현손익']:,.0f}")
+                    _mc2.metric("잔고수량", f"{_qty_i:,.0f}주")
+                    _mc3.metric("평균단가", f"₩{_avg_i:,.0f}")
+                    _mc4.metric("누적매수", f"₩{_pi['누적매수금액']:,.0f}")
+                    _mc5.metric("누적매도", f"₩{_pi['누적매도금액']:,.0f}")
+
+            st.divider()
+
+            # ── 전체 거래내역 테이블 ──
+            _itab1, _itab2 = st.tabs(["📋 전체 거래내역", "📦 매수 로트별 손익"])
+
+            with _itab1:
+                _sc = ['거래일자','매매구분','거래수량','거래단가','거래금액',
+                       '평균단가','잔고수량','실현손익','계좌']
+                _sc = [c for c in _sc if c in _det_df.columns]
+
+                def _di_cpnl(v):
+                    try:
+                        f = float(v)
+                        if f > 0: return 'color:#e74c3c;font-weight:bold'
+                        if f < 0: return 'color:#2980b9;font-weight:bold'
+                    except: pass
+                    return ''
+                def _di_ctype(v):
+                    s = str(v)
+                    if '매수' in s: return 'color:#e74c3c'
+                    if '매도' in s: return 'color:#2980b9'
+                    return ''
+
+                st.dataframe(
+                    _det_df[_sc].sort_values('거래일자', ascending=False)
+                    .style
+                    .map(_di_cpnl,  subset=['실현손익'])
+                    .map(_di_ctype, subset=['매매구분'])
+                    .format({'거래수량':'{:,.0f}','거래단가':'{:,.0f}','거래금액':'{:,.0f}',
+                             '평균단가':'{:,.0f}','잔고수량':'{:,.0f}','실현손익':'{:,.0f}'}),
+                    use_container_width=True, height=380
+                )
+
+            with _itab2:
+                _qty_held_i = float(_pos_inline.iloc[0]['잔고수량']) if not _pos_inline.empty else 0
+                if not _lp_inline:
+                    st.info("💡 위의 '📡 현재가 조회' 버튼을 누르면 매수 로트별 손익이 표시됩니다.")
+                elif _qty_held_i <= 0:
+                    st.info("보유 수량이 없습니다 (전량 매도 완료).")
+                else:
+                    _lots = calculate_fifo_lots(combined_df, _sym_key)
+                    if _lots.empty:
+                        st.info("로트 데이터가 없습니다.")
+                    else:
+                        _lots = _lots.copy()
+                        _lots['현재가']     = _lp_inline
+                        _lots['단가손익']   = _lots['매수단가'].apply(lambda p: int(_lp_inline - p))
+                        _lots['수익률(%)']  = _lots['매수단가'].apply(
+                            lambda p: round((_lp_inline - p) / p * 100, 2) if p > 0 else 0)
+                        _lots['미실현손익'] = (_lots['단가손익'] * _lots['잔여수량']).astype(int)
+                        _lots['매수금액']   = (_lots['매수단가'] * _lots['잔여수량']).astype(int)
+                        _lots['평가금액']   = (_lp_inline * _lots['잔여수량']).astype(int)
+                        _lots['매수일']     = pd.to_datetime(_lots['매수일']).dt.strftime('%Y-%m-%d')
+
+                        _tunr  = _lots['미실현손익'].sum()
+                        _tcost = _lots['매수금액'].sum()
+                        _tret  = _tunr / _tcost * 100 if _tcost else 0
+
+                        _lc1, _lc2, _lc3, _lc4 = st.columns(4)
+                        _lc1.metric("잔여 로트 수",      f"{len(_lots)}건")
+                        _lc2.metric("미실현손익 합",      f"₩{_tunr:,.0f}",
+                                    delta=f"{_tret:+.2f}%",
+                                    delta_color="normal" if _tunr >= 0 else "inverse")
+                        _lc3.metric("총 매수금액(잔여)", f"₩{_tcost:,.0f}")
+                        _lc4.metric("총 평가금액",        f"₩{_lots['평가금액'].sum():,.0f}")
+
+                        _disp_lots = _lots[['매수일','매수단가','매수수량','잔여수량',
+                                            '현재가','단가손익','수익률(%)','미실현손익',
+                                            '매수금액','평가금액','계좌']]
+
+                        def _hl_lot2(row):
+                            try:
+                                bg = '#1a3a1a' if float(row.get('미실현손익', 0)) >= 0 else '#3a1a1a'
+                            except: bg = ''
+                            return [f'background-color:{bg};color:white'] * len(row)
+
+                        def _cl_lot2(val):
+                            try:
+                                v = float(val)
+                                if v > 0: return 'color:#4ecca3;font-weight:bold'
+                                if v < 0: return 'color:#ff6b6b;font-weight:bold'
+                            except: pass
+                            return ''
+
+                        st.dataframe(
+                            _disp_lots.style
+                            .apply(_hl_lot2, axis=1)
+                            .map(_cl_lot2, subset=['단가손익','수익률(%)','미실현손익'])
+                            .format({'매수단가':'{:,.0f}','매수수량':'{:,.0f}',
+                                     '잔여수량':'{:,.0f}','현재가':'{:,.0f}',
+                                     '단가손익':'{:+,.0f}','수익률(%)':'{:+.2f}',
+                                     '미실현손익':'{:+,.0f}','매수금액':'{:,.0f}',
+                                     '평가금액':'{:,.0f}'}),
+                            use_container_width=True,
+                            height=min(80 + len(_lots) * 38, 500),
+                        )
+                        st.caption("🟢 초록 = 수익 로트 · 🔴 빨강 = 손실 로트  |  매도 완료 로트는 표시 안 함")
 
 
 # ════════════════════════════════════════
