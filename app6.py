@@ -1185,6 +1185,17 @@ with tab1:
             lambda r: int(r['현재가'] * r['잔고수량'])
                       if pd.notna(r.get('현재가')) and r['잔고수량'] > 0 else None, axis=1)
 
+        # 최초매수일 / 보유일수 / 매수횟수 계산
+        _buy_df = combined_df[combined_df['매매유형'] == 'BUY'].copy()
+        _buy_stats = _buy_df.groupby('종목키').agg(
+            최초매수일=('거래일자', 'min'),
+            매수횟수=('거래일자', 'count'),
+        ).reset_index()
+        _today = pd.Timestamp(datetime.today().date())
+        _buy_stats['보유일수'] = (_today - _buy_stats['최초매수일']).dt.days
+        _buy_stats['최초매수일'] = _buy_stats['최초매수일'].dt.strftime('%Y-%m-%d')
+        disp_pos = disp_pos.merge(_buy_stats[['종목키','최초매수일','보유일수','매수횟수']], on='종목키', how='left')
+
         # 요약 메트릭
         _hp = disp_pos[(disp_pos['잔고수량'] > 0) & disp_pos['미실현손익'].notna()]
         if not _hp.empty:
@@ -1197,11 +1208,15 @@ with tab1:
             _m2.metric("총 평가금액",  f"₩{_hp['평가금액'].sum():,.0f}")
             _m3.metric("총 보유원가",  f"₩{_cost:,.0f}")
 
-        base_cols = ['종목명', '잔고수량', '평균단가', '현재가', '수익률(%)', '미실현손익', '평가금액', '보유원가', '실현손익']
+        base_cols = ['종목명', '잔고수량', '평균단가', '현재가', '수익률(%)',
+                     '미실현손익', '평가금액', '보유원가', '실현손익',
+                     '최초매수일', '보유일수', '매수횟수']
+        base_cols = [c for c in base_cols if c in disp_pos.columns]
         fmt = {
             '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '현재가': '{:,.0f}',
             '보유원가': '{:,.0f}', '실현손익': '{:,.0f}',
             '미실현손익': '{:,.0f}', '평가금액': '{:,.0f}', '수익률(%)': '{:+.2f}',
+            '보유일수': '{:,.0f}', '매수횟수': '{:,.0f}',
         }
 
         def _color_pnl_cell(val):
@@ -1335,16 +1350,71 @@ with tab3:
         pos_row = positions_df[positions_df['종목키'] == symbol_key]
         if not pos_row.empty:
             p = pos_row.iloc[0]
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("실현손익", f"₩{p['실현손익']:,.0f}")
-            c2.metric("잔고수량", f"{p['잔고수량']:,}주")
-            c3.metric("평균단가", f"₩{p['평균단가']:,.0f}")
-            c4.metric("누적매수", f"₩{p['누적매수금액']:,.0f}")
-            c5.metric("누적매도", f"₩{p['누적매도금액']:,.0f}")
+            _lp   = st.session_state.get('live_prices', {}).get(symbol_key)
+            _ltime = st.session_state.get('live_prices_time', '')
+            _avg  = float(p['평균단가'])
+            _qty  = float(p['잔고수량'])
+
+            if _lp and _qty > 0:
+                _unr     = int((_lp - _avg) * _qty)
+                _ret_pct = (_lp - _avg) / _avg * 100 if _avg > 0 else 0
+                # 최초매수일 계산
+                _fb = detail_df[detail_df['매매유형']=='BUY']['거래일자'].min()
+                _hold_days = (pd.Timestamp(datetime.today().date()) - _fb).days if pd.notna(_fb) else 0
+
+                st.caption(f"현재가 기준 — {_ltime}  (tab1 '📡 현재가 조회' 버튼으로 갱신)")
+                c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+                c1.metric("실현손익",   f"₩{p['실현손익']:,.0f}")
+                c2.metric("잔고수량",   f"{_qty:,.0f}주")
+                c3.metric("평균단가",   f"₩{_avg:,.0f}")
+                c4.metric("현재가",     f"₩{_lp:,.0f}",
+                          delta=f"{_ret_pct:+.2f}%",
+                          delta_color="normal" if _unr >= 0 else "inverse")
+                c5.metric("미실현손익", f"₩{_unr:,.0f}",
+                          delta=f"{_ret_pct:+.2f}%",
+                          delta_color="normal" if _unr >= 0 else "inverse")
+                c6.metric("평가금액",   f"₩{int(_lp*_qty):,.0f}")
+                c7.metric("보유일수",   f"{_hold_days:,}일",
+                          delta=f"최초 {str(_fb)[:10]}", delta_color="off")
+            else:
+                if _qty > 0 and not _lp:
+                    st.caption("💡 tab1의 '📡 현재가 조회' 버튼을 누르면 현재가 기준 손익이 표시됩니다.")
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("실현손익",   f"₩{p['실현손익']:,.0f}")
+                c2.metric("잔고수량",   f"{_qty:,.0f}주")
+                c3.metric("평균단가",   f"₩{_avg:,.0f}")
+                c4.metric("누적매수",   f"₩{p['누적매수금액']:,.0f}")
+                c5.metric("누적매도",   f"₩{p['누적매도금액']:,.0f}")
+
+        # ── 매수 이력 건별 손익 테이블 ──
+        _lp_for_table = st.session_state.get('live_prices', {}).get(symbol_key)
+        _avg_now = float(pos_row.iloc[0]['평균단가']) if not pos_row.empty else 0
 
         show_cols = ['거래일자', '매매구분', '거래수량', '거래단가', '거래금액',
                      '평균단가', '잔고수량', '실현손익', '계좌', '수동입력']
         show_cols = [c for c in show_cols if c in detail_df.columns]
+
+        # 현재가 있고 보유 종목이면 매수 건별 미실현손익 컬럼 추가
+        _detail_show = detail_df.copy()
+        if _lp_for_table:
+            def _calc_row_unrealized(row):
+                if row.get('매매유형') != 'BUY':
+                    return None
+                # 해당 매수 건의 잔여 수량 = 현재 잔고수량 기준 비례 추정은 복잡하므로
+                # "이 단가로 샀을 때 현재가 대비 단가 손익"만 표시
+                bp = float(row.get('거래단가', 0))
+                if bp <= 0:
+                    return None
+                return round((_lp_for_table - bp) / bp * 100, 2)
+
+            _detail_show['매수단가 대비(%)'] = _detail_show.apply(_calc_row_unrealized, axis=1)
+            _detail_show['단가손익'] = _detail_show.apply(
+                lambda r: int(_lp_for_table - r['거래단가'])
+                          if r.get('매매유형') == 'BUY' and r['거래단가'] > 0 else None, axis=1)
+            show_cols_ext = show_cols + ['단가손익', '매수단가 대비(%)']
+            show_cols_ext = [c for c in show_cols_ext if c in _detail_show.columns]
+        else:
+            show_cols_ext = show_cols
 
         def color_pnl(val):
             try:
@@ -1366,16 +1436,22 @@ with tab3:
                 return ['background-color:#2d2d00'] * len(row)
             return [''] * len(row)
 
-        st.dataframe(
-            detail_df[show_cols].sort_values('거래일자', ascending=False)
+        _fmt = {'거래수량': '{:,.0f}', '거래단가': '{:,.0f}', '거래금액': '{:,.0f}',
+                '평균단가': '{:,.0f}', '잔고수량': '{:,.0f}', '실현손익': '{:,.0f}',
+                '단가손익': '{:+,.0f}', '매수단가 대비(%)': '{:+.2f}'}
+        _fmt = {k: v for k, v in _fmt.items() if k in show_cols_ext}
+
+        _style = (
+            _detail_show[show_cols_ext].sort_values('거래일자', ascending=False)
             .style
             .apply(highlight_manual, axis=1)
-            .map(color_pnl,  subset=['실현손익'])
+            .map(color_pnl, subset=[c for c in ['실현손익','단가손익','매수단가 대비(%)'] if c in show_cols_ext])
             .map(color_type, subset=['매매구분'])
-            .format({'거래수량': '{:,.0f}', '거래단가': '{:,.0f}', '거래금액': '{:,.0f}',
-                     '평균단가': '{:,.0f}', '잔고수량': '{:,.0f}', '실현손익': '{:,.0f}'}),
-            use_container_width=True, height=400
+            .format(_fmt)
         )
+        if _lp_for_table:
+            st.caption(f"💡 단가손익 = 현재가({_lp_for_table:,}원) - 매수단가  |  매수단가 대비(%) = 수익률  |  매도 건은 '-' 표시")
+        st.dataframe(_style, use_container_width=True, height=400)
         st.caption("🟡 어두운 노란 배경 = 수동 입력 거래")
 
         buy_df  = detail_df[detail_df['매매유형'] == 'BUY']
@@ -1401,6 +1477,27 @@ with tab3:
                 line=dict(color='#f39c12', width=1.5, dash='dot'),
                 hovertemplate='%{x}<br>평균단가 %{y:,.0f}원<extra></extra>'
             ))
+
+        # 현재가 수평선 추가
+        _lp_chart = st.session_state.get('live_prices', {}).get(symbol_key)
+        if _lp_chart and not detail_df.empty:
+            fig.add_hline(
+                y=_lp_chart,
+                line=dict(color='#2ecc71', width=2, dash='dash'),
+                annotation_text=f"현재가 {_lp_chart:,}원",
+                annotation_position="top right",
+                annotation_font=dict(color='#2ecc71', size=12),
+            )
+            # 평균단가 수평선도 함께 표시 (현재가 있을 때)
+            if _avg_now > 0:
+                _unr_pct = (_lp_chart - _avg_now) / _avg_now * 100
+                fig.add_hline(
+                    y=_avg_now,
+                    line=dict(color='#f39c12', width=1.5, dash='dashdot'),
+                    annotation_text=f"현재 평균단가 {_avg_now:,.0f}원 ({_unr_pct:+.1f}%)",
+                    annotation_position="bottom right",
+                    annotation_font=dict(color='#f39c12', size=11),
+                )
         fig.update_layout(title=f"{selected_stock} 매매 타임라인",
                           xaxis_title='날짜', yaxis_title='단가 (원)',
                           template='plotly_dark', height=400)
