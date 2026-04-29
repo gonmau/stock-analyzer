@@ -1565,6 +1565,7 @@ with tab3:
 
         # 현재가 수평선 추가
         _lp_chart = st.session_state.get('live_prices', {}).get(symbol_key)
+        _avg_now  = float(pos_row.iloc[0]['평균단가']) if not pos_row.empty else 0
         if _lp_chart and not detail_df.empty:
             fig.add_hline(
                 y=_lp_chart,
@@ -1573,7 +1574,6 @@ with tab3:
                 annotation_position="top right",
                 annotation_font=dict(color='#2ecc71', size=12),
             )
-            # 평균단가 수평선도 함께 표시 (현재가 있을 때)
             if _avg_now > 0:
                 _unr_pct = (_lp_chart - _avg_now) / _avg_now * 100
                 fig.add_hline(
