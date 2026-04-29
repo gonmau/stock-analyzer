@@ -672,7 +672,89 @@ def calculate_trade_detail(df, symbol_key):
     return pd.DataFrame(rows)
 
 
-def calculate_fifo_lots(df, symbol_key):
+def render_lot_tabs(combined_df, symbol_key, live_price, pos_row):
+    """
+    계좌별 탭 + '전체' 탭으로 FIFO 로트 손익 테이블 렌더링.
+    live_price: int|None, pos_row: DataFrame row
+    """
+    _qty_held = float(pos_row.iloc[0]['잔고수량']) if not pos_row.empty else 0
+    if not live_price:
+        st.info("💡 Tab1의 '📡 현재가 조회' 버튼을 누르면 매수 로트별 손익이 표시됩니다.")
+        return
+    if _qty_held <= 0:
+        st.info("보유 수량이 없습니다 (전량 매도 완료).")
+        return
+
+    all_lots = calculate_fifo_lots(combined_df, symbol_key)
+    if all_lots.empty:
+        st.info("로트 데이터가 없습니다.")
+        return
+
+    # 계좌 목록
+    accounts = sorted(all_lots['계좌'].dropna().unique().tolist())
+    tab_labels = ['전체'] + accounts
+    tabs = st.tabs(tab_labels)
+
+    def _render_lots_table(lots_df):
+        if lots_df.empty:
+            st.info("해당 계좌의 보유 로트가 없습니다.")
+            return
+        lots_df = lots_df.copy()
+        lots_df['현재가']     = live_price
+        lots_df['단가손익']   = lots_df['매수단가'].apply(lambda p: int(live_price - p))
+        lots_df['수익률(%)']  = lots_df['매수단가'].apply(
+            lambda p: round((live_price - p) / p * 100, 2) if p > 0 else 0)
+        lots_df['미실현손익'] = (lots_df['단가손익'] * lots_df['잔여수량']).astype(int)
+        lots_df['매수금액']   = (lots_df['매수단가'] * lots_df['잔여수량']).astype(int)
+        lots_df['평가금액']   = (live_price * lots_df['잔여수량']).astype(int)
+        lots_df['매수일']     = pd.to_datetime(lots_df['매수일']).dt.strftime('%Y-%m-%d')
+
+        tunr  = lots_df['미실현손익'].sum()
+        tcost = lots_df['매수금액'].sum()
+        tret  = tunr / tcost * 100 if tcost else 0
+
+        lc1, lc2, lc3, lc4 = st.columns(4)
+        lc1.metric("잔여 로트 수",       f"{len(lots_df)}건")
+        lc2.metric("미실현손익 합",       f"₩{tunr:,.0f}",
+                   delta=f"{tret:+.2f}%",
+                   delta_color="normal" if tunr >= 0 else "inverse")
+        lc3.metric("총 매수금액(잔여)",  f"₩{tcost:,.0f}")
+        lc4.metric("총 평가금액",         f"₩{lots_df['평가금액'].sum():,.0f}")
+
+        disp = lots_df[['매수일','매수단가','매수수량','잔여수량',
+                         '현재가','단가손익','수익률(%)','미실현손익',
+                         '매수금액','평가금액','계좌']]
+
+        def _hl(row):
+            try: bg = '#1a3a1a' if float(row.get('미실현손익', 0)) >= 0 else '#3a1a1a'
+            except: bg = ''
+            return [f'background-color:{bg};color:white'] * len(row)
+
+        def _cl(val):
+            try:
+                v = float(val)
+                if v > 0: return 'color:#4ecca3;font-weight:bold'
+                if v < 0: return 'color:#ff6b6b;font-weight:bold'
+            except: pass
+            return ''
+
+        st.dataframe(
+            disp.style.apply(_hl, axis=1)
+            .map(_cl, subset=['단가손익','수익률(%)','미실현손익'])
+            .format({'매수단가':'{:,.0f}','매수수량':'{:,.0f}','잔여수량':'{:,.0f}',
+                     '현재가':'{:,.0f}','단가손익':'{:+,.0f}','수익률(%)':'{:+.2f}',
+                     '미실현손익':'{:+,.0f}','매수금액':'{:,.0f}','평가금액':'{:,.0f}'}),
+            use_container_width=True,
+            height=min(80 + len(lots_df) * 38, 500),
+        )
+        st.caption("🟢 초록 = 수익 로트 · 🔴 빨강 = 손실 로트  |  매도 완료 로트는 표시 안 함")
+
+    with tabs[0]:  # 전체
+        _render_lots_table(all_lots)
+
+    for i, acc in enumerate(accounts):
+        with tabs[i + 1]:
+            _render_lots_table(all_lots[all_lots['계좌'] == acc])
     """
     FIFO 방식으로 매수 로트별 잔여수량을 계산.
     반환 컬럼: 거래일자, 매수단가, 매수수량, 잔여수량, 계좌
@@ -1392,69 +1474,7 @@ with tab1:
                 )
 
             with _itab2:
-                _qty_held_i = float(_pos_inline.iloc[0]['잔고수량']) if not _pos_inline.empty else 0
-                if not _lp_inline:
-                    st.info("💡 위의 '📡 현재가 조회' 버튼을 누르면 매수 로트별 손익이 표시됩니다.")
-                elif _qty_held_i <= 0:
-                    st.info("보유 수량이 없습니다 (전량 매도 완료).")
-                else:
-                    _lots = calculate_fifo_lots(combined_df, _sym_key)
-                    if _lots.empty:
-                        st.info("로트 데이터가 없습니다.")
-                    else:
-                        _lots = _lots.copy()
-                        _lots['현재가']     = _lp_inline
-                        _lots['단가손익']   = _lots['매수단가'].apply(lambda p: int(_lp_inline - p))
-                        _lots['수익률(%)']  = _lots['매수단가'].apply(
-                            lambda p: round((_lp_inline - p) / p * 100, 2) if p > 0 else 0)
-                        _lots['미실현손익'] = (_lots['단가손익'] * _lots['잔여수량']).astype(int)
-                        _lots['매수금액']   = (_lots['매수단가'] * _lots['잔여수량']).astype(int)
-                        _lots['평가금액']   = (_lp_inline * _lots['잔여수량']).astype(int)
-                        _lots['매수일']     = pd.to_datetime(_lots['매수일']).dt.strftime('%Y-%m-%d')
-
-                        _tunr  = _lots['미실현손익'].sum()
-                        _tcost = _lots['매수금액'].sum()
-                        _tret  = _tunr / _tcost * 100 if _tcost else 0
-
-                        _lc1, _lc2, _lc3, _lc4 = st.columns(4)
-                        _lc1.metric("잔여 로트 수",      f"{len(_lots)}건")
-                        _lc2.metric("미실현손익 합",      f"₩{_tunr:,.0f}",
-                                    delta=f"{_tret:+.2f}%",
-                                    delta_color="normal" if _tunr >= 0 else "inverse")
-                        _lc3.metric("총 매수금액(잔여)", f"₩{_tcost:,.0f}")
-                        _lc4.metric("총 평가금액",        f"₩{_lots['평가금액'].sum():,.0f}")
-
-                        _disp_lots = _lots[['매수일','매수단가','매수수량','잔여수량',
-                                            '현재가','단가손익','수익률(%)','미실현손익',
-                                            '매수금액','평가금액','계좌']]
-
-                        def _hl_lot2(row):
-                            try:
-                                bg = '#1a3a1a' if float(row.get('미실현손익', 0)) >= 0 else '#3a1a1a'
-                            except: bg = ''
-                            return [f'background-color:{bg};color:white'] * len(row)
-
-                        def _cl_lot2(val):
-                            try:
-                                v = float(val)
-                                if v > 0: return 'color:#4ecca3;font-weight:bold'
-                                if v < 0: return 'color:#ff6b6b;font-weight:bold'
-                            except: pass
-                            return ''
-
-                        st.dataframe(
-                            _disp_lots.style
-                            .apply(_hl_lot2, axis=1)
-                            .map(_cl_lot2, subset=['단가손익','수익률(%)','미실현손익'])
-                            .format({'매수단가':'{:,.0f}','매수수량':'{:,.0f}',
-                                     '잔여수량':'{:,.0f}','현재가':'{:,.0f}',
-                                     '단가손익':'{:+,.0f}','수익률(%)':'{:+.2f}',
-                                     '미실현손익':'{:+,.0f}','매수금액':'{:,.0f}',
-                                     '평가금액':'{:,.0f}'}),
-                            use_container_width=True,
-                            height=min(80 + len(_lots) * 38, 500),
-                        )
-                        st.caption("🟢 초록 = 수익 로트 · 🔴 빨강 = 손실 로트  |  매도 완료 로트는 표시 안 함")
+                render_lot_tabs(combined_df, _sym_key, _lp_inline, _pos_inline)
 
 
 # ════════════════════════════════════════
@@ -1619,71 +1639,11 @@ with tab3:
         _lp_for_table = st.session_state.get('live_prices', {}).get(symbol_key)
         _qty_held = float(pos_row.iloc[0]['잔고수량']) if not pos_row.empty else 0
 
-        if _lp_for_table and _qty_held > 0:
-            lots_df = calculate_fifo_lots(combined_df, symbol_key)
-            if not lots_df.empty:
-                lots_df = lots_df.copy()
-                lots_df['현재가']       = _lp_for_table
-                lots_df['단가손익']     = lots_df['매수단가'].apply(lambda p: int(_lp_for_table - p))
-                lots_df['수익률(%)']    = lots_df['매수단가'].apply(
-                    lambda p: round((_lp_for_table - p) / p * 100, 2) if p > 0 else 0)
-                lots_df['미실현손익']   = (lots_df['단가손익'] * lots_df['잔여수량']).astype(int)
-                lots_df['매수금액']     = (lots_df['매수단가'] * lots_df['잔여수량']).astype(int)
-                lots_df['평가금액']     = (_lp_for_table * lots_df['잔여수량']).astype(int)
-                lots_df['매수일']       = pd.to_datetime(lots_df['매수일']).dt.strftime('%Y-%m-%d')
-
-                total_unr  = lots_df['미실현손익'].sum()
-                total_cost = lots_df['매수금액'].sum()
-                total_ret  = total_unr / total_cost * 100 if total_cost else 0
-
-                st.divider()
-                st.markdown(f"**📦 매수 로트별 현재 손익** — FIFO 잔여수량 기준 · 현재가 {_lp_for_table:,}원")
-                lm1, lm2, lm3, lm4 = st.columns(4)
-                lm1.metric("잔여 로트 수",  f"{len(lots_df)}건")
-                lm2.metric("미실현손익 합", f"₩{total_unr:,.0f}",
-                           delta=f"{total_ret:+.2f}%",
-                           delta_color="normal" if total_unr >= 0 else "inverse")
-                lm3.metric("총 매수금액(잔여)", f"₩{total_cost:,.0f}")
-                lm4.metric("총 평가금액",    f"₩{lots_df['평가금액'].sum():,.0f}")
-
-                display_lots = lots_df[['매수일','매수단가','매수수량','잔여수량',
-                                        '현재가','단가손익','수익률(%)','미실현손익',
-                                        '매수금액','평가금액','계좌']].copy()
-
-                def _hl_lot(row):
-                    v = row.get('미실현손익', 0)
-                    try:
-                        bg = '#1a3a1a' if float(v) >= 0 else '#3a1a1a'
-                    except Exception:
-                        bg = ''
-                    return [f'background-color:{bg};color:white'] * len(row)
-
-                def _color_lot_cell(val):
-                    try:
-                        v = float(val)
-                        if v > 0: return 'color:#4ecca3;font-weight:bold'
-                        if v < 0: return 'color:#ff6b6b;font-weight:bold'
-                    except Exception:
-                        pass
-                    return ''
-
-                st.dataframe(
-                    display_lots.style
-                    .apply(_hl_lot, axis=1)
-                    .map(_color_lot_cell, subset=['단가손익','수익률(%)','미실현손익'])
-                    .format({
-                        '매수단가':   '{:,.0f}', '매수수량':   '{:,.0f}',
-                        '잔여수량':   '{:,.0f}', '현재가':     '{:,.0f}',
-                        '단가손익':   '{:+,.0f}', '수익률(%)': '{:+.2f}',
-                        '미실현손익': '{:+,.0f}', '매수금액':  '{:,.0f}',
-                        '평가금액':   '{:,.0f}',
-                    }),
-                    use_container_width=True,
-                    height=min(80 + len(lots_df) * 38, 500),
-                )
-                st.caption("🟢 초록 배경 = 수익 로트 · 🔴 빨강 배경 = 손실 로트  |  잔여수량 0인 로트(매도 완료)는 표시 안 함")
-        elif _qty_held > 0 and not _lp_for_table:
-            st.info("💡 Tab1의 '📡 현재가 조회' 버튼을 누르면 매수 로트별 손익이 표시됩니다.")
+        if _qty_held > 0:
+            st.divider()
+            st.markdown(f"**📦 매수 로트별 현재 손익** — FIFO 잔여수량 기준"
+                        + (f" · 현재가 {_lp_for_table:,}원" if _lp_for_table else ""))
+            render_lot_tabs(combined_df, symbol_key, _lp_for_table, pos_row)
 
         buy_df  = detail_df[detail_df['매매유형'] == 'BUY']
         sell_df = detail_df[detail_df['매매유형'] == 'SELL']
