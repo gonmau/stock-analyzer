@@ -1165,15 +1165,24 @@ with tab1:
             lambda r: int(r['현재가'] * r['잔고수량'])
                       if pd.notna(r.get('현재가')) and r['잔고수량'] > 0 else None, axis=1)
 
-        # 최초매수일 / 보유일수 / 매수횟수 계산
+        # 현재 보유 로트 기준 최초매수일 / 보유일수 / 매수횟수 계산
+        # FIFO 잔여 로트 중 가장 오래된 날짜 사용 (완전 매도 후 재매수 시 재매수일 기준)
         _buy_df = combined_df[combined_df['매매유형'] == 'BUY'].copy()
-        _buy_stats = _buy_df.groupby('종목키').agg(
-            최초매수일=('거래일자', 'min'),
-            매수횟수=('거래일자', 'count'),
-        ).reset_index()
-        _today = pd.Timestamp(datetime.today().date())
-        _buy_stats['보유일수'] = (_today - _buy_stats['최초매수일']).dt.days
-        _buy_stats['최초매수일'] = _buy_stats['최초매수일'].dt.strftime('%Y-%m-%d')
+        _today  = pd.Timestamp(datetime.today().date())
+        _lot_stats = []
+        for _sk in disp_pos[disp_pos['잔고수량'] > 0]['종목키']:
+            _lots_tmp = calculate_fifo_lots(combined_df, _sk)
+            if not _lots_tmp.empty:
+                _oldest   = pd.to_datetime(_lots_tmp['매수일']).min()
+                _buy_cnt  = len(_buy_df[_buy_df['종목키'] == _sk])
+                _lot_stats.append({
+                    '종목키':   _sk,
+                    '최초매수일': _oldest.strftime('%Y-%m-%d'),
+                    '보유일수':  (_today - _oldest).days,
+                    '매수횟수':  _buy_cnt,
+                })
+        _buy_stats = pd.DataFrame(_lot_stats) if _lot_stats else pd.DataFrame(
+            columns=['종목키','최초매수일','보유일수','매수횟수'])
         disp_pos = disp_pos.merge(_buy_stats[['종목키','최초매수일','보유일수','매수횟수']], on='종목키', how='left')
 
         # 요약 메트릭
@@ -1266,8 +1275,9 @@ with tab1:
                 if _lp_inline and _qty_i > 0:
                     _unr_i   = int((_lp_inline - _avg_i) * _qty_i)
                     _ret_i   = (_lp_inline - _avg_i) / _avg_i * 100 if _avg_i > 0 else 0
-                    _fb_i    = _det_df[_det_df['매매유형'] == 'BUY']['거래일자'].min()
-                    _hdays_i = (pd.Timestamp(datetime.today().date()) - _fb_i).days if pd.notna(_fb_i) else 0
+                    _lots_i  = calculate_fifo_lots(combined_df, _sym_key)
+                    _fb_i    = pd.to_datetime(_lots_i['매수일']).min() if not _lots_i.empty else None
+                    _hdays_i = (pd.Timestamp(datetime.today().date()) - _fb_i).days if _fb_i is not None and pd.notna(_fb_i) else 0
                     st.caption(f"**{_sel_inline}** · 현재가 기준 {_ltime_inline}")
                     _mc1, _mc2, _mc3, _mc4, _mc5, _mc6, _mc7 = st.columns(7)
                     _mc1.metric("실현손익",   f"₩{_pi['실현손익']:,.0f}")
@@ -1422,9 +1432,10 @@ with tab3:
             if _lp and _qty > 0:
                 _unr     = int((_lp - _avg) * _qty)
                 _ret_pct = (_lp - _avg) / _avg * 100 if _avg > 0 else 0
-                # 최초매수일 계산
-                _fb = detail_df[detail_df['매매유형']=='BUY']['거래일자'].min()
-                _hold_days = (pd.Timestamp(datetime.today().date()) - _fb).days if pd.notna(_fb) else 0
+                # 현재 보유 로트 기준 최초매수일 (완전 매도 후 재매수 시 재매수일 기준)
+                _lots_fb   = calculate_fifo_lots(combined_df, symbol_key)
+                _fb        = pd.to_datetime(_lots_fb['매수일']).min() if not _lots_fb.empty else None
+                _hold_days = (pd.Timestamp(datetime.today().date()) - _fb).days if _fb is not None and pd.notna(_fb) else 0
 
                 st.caption(f"현재가 기준 — {_ltime}  (tab1 '📡 현재가 조회' 버튼으로 갱신)")
                 c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
