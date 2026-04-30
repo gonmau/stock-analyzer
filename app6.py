@@ -190,7 +190,6 @@ _YF_NAME_MAP: dict[str, str] = {
     # ── ETF (KS) ───────────────────────────────────────
     '미래에셋TIGER인도니프티50': '448540.KS',
     '신한SOL조선TOP3플러스':     '465670.KS',
-    'rise ai&로봇': '469070.KS',
     # ── 미국 주식 (티커 그대로) ────────────────────────
     '메타플랫폼스':     'META',
     '메타 플랫폼스':    'META',
@@ -756,6 +755,9 @@ def render_lot_tabs(combined_df, symbol_key, live_price, pos_row):
     for i, acc in enumerate(accounts):
         with tabs[i + 1]:
             _render_lots_table(all_lots[all_lots['계좌'] == acc])
+
+
+def calculate_fifo_lots(df, symbol_key):
     """
     FIFO 방식으로 매수 로트별 잔여수량을 계산.
     반환 컬럼: 거래일자, 매수단가, 매수수량, 잔여수량, 계좌
