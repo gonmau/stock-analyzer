@@ -1305,7 +1305,7 @@ with tab1:
             st.divider()
 
             # ── 전체 거래내역 테이블 ──
-            _itab1, _itab2 = st.tabs(["📋 전체 거래내역", "📦 매수 로트별 손익"])
+            _itab1, _itab2, _itab3 = st.tabs(["📋 전체 거래내역", "📦 매수 로트별 손익", "💧 물타기 계산기"])
 
             with _itab1:
                 _sc = ['거래일자','매매구분','거래수량','거래단가','거래금액',
@@ -1337,6 +1337,97 @@ with tab1:
 
             with _itab2:
                 render_lot_tabs(combined_df, _sym_key, _lp_inline, _pos_inline)
+
+            with _itab3:
+                # 현재 보유 정보 자동 채우기
+                _wi_avg = float(_pos_inline.iloc[0]['평균단가']) if not _pos_inline.empty else 0.0
+                _wi_qty = float(_pos_inline.iloc[0]['잔고수량']) if not _pos_inline.empty else 0.0
+                _wi_cur = float(_lp_inline) if _lp_inline else _wi_avg
+
+                st.caption("현재 보유 정보가 자동으로 채워집니다. 값을 수정해서 시뮬레이션하세요.")
+
+                wc1, wc2, wc3 = st.columns(3)
+                w_avg = wc1.number_input("현재 평균단가 (원)", min_value=1,
+                                         value=int(_wi_avg) if _wi_avg > 0 else 1,
+                                         step=100, format="%d", key=f"w_avg_{_sel_inline}")
+                w_qty = wc2.number_input("현재 보유수량 (주)", min_value=0,
+                                         value=int(_wi_qty),
+                                         step=1, format="%d", key=f"w_qty_{_sel_inline}")
+                w_cur = wc3.number_input("현재가 (원)", min_value=1,
+                                         value=int(_wi_cur) if _wi_cur > 0 else 1,
+                                         step=100, format="%d", key=f"w_cur_{_sel_inline}")
+
+                st.divider()
+                st.markdown("##### 방법 1 — 목표 평균단가 입력 → 필요 수량·금액 계산")
+
+                wa1, wa2 = st.columns(2)
+                w_target_avg = wa1.number_input("목표 평균단가 (원)", min_value=1,
+                                                value=int(w_cur), step=100, format="%d",
+                                                key=f"w_tgt_{_sel_inline}")
+                w_add_price = wa2.number_input("추가 매수 단가 (원)", min_value=1,
+                                               value=int(w_cur), step=100, format="%d",
+                                               key=f"w_aprice_{_sel_inline}")
+
+                if w_target_avg < w_avg and w_add_price < w_avg:
+                    # 필요 추가 수량: (목표평균 - 현재평균) * 현재수량 / (추가단가 - 목표평균)
+                    denom = w_add_price - w_target_avg
+                    if denom != 0:
+                        need_qty = int((w_avg - w_target_avg) * w_qty / (w_target_avg - w_add_price))
+                        need_amt = need_qty * w_add_price
+                        new_avg  = (w_avg * w_qty + w_add_price * need_qty) / (w_qty + need_qty)
+                        new_qty  = w_qty + need_qty
+                        new_eval = new_qty * w_cur
+                        new_unr  = (w_cur - new_avg) * new_qty
+
+                        rc1, rc2, rc3, rc4 = st.columns(4)
+                        rc1.metric("필요 추가 수량", f"{need_qty:,}주")
+                        rc2.metric("필요 추가 금액", f"₩{need_amt:,.0f}")
+                        rc3.metric("물타기 후 평균단가", f"₩{new_avg:,.0f}")
+                        rc4.metric("물타기 후 총수량", f"{int(new_qty):,}주")
+
+                        rc5, rc6, rc7 = st.columns(3)
+                        rc5.metric("물타기 후 평가금액", f"₩{new_eval:,.0f}")
+                        rc6.metric("물타기 후 미실현손익", f"₩{new_unr:,.0f}",
+                                   delta=f"{(w_cur-new_avg)/new_avg*100:+.2f}%",
+                                   delta_color="normal" if new_unr >= 0 else "inverse")
+                        rc7.metric("현재 미실현손익", f"₩{(w_cur-w_avg)*w_qty:,.0f}",
+                                   delta=f"{(w_cur-w_avg)/w_avg*100:+.2f}%",
+                                   delta_color="normal" if (w_cur-w_avg)*w_qty >= 0 else "inverse")
+                    else:
+                        st.warning("추가 매수 단가와 목표 평균단가가 같으면 계산이 불가합니다.")
+                elif w_target_avg >= w_avg:
+                    st.info("목표 평균단가는 현재 평균단가보다 낮아야 합니다.")
+                elif w_add_price >= w_avg:
+                    st.info("추가 매수 단가는 현재 평균단가보다 낮아야 물타기가 됩니다.")
+
+                st.divider()
+                st.markdown("##### 방법 2 — 추가 매수 금액 입력 → 평균단가 얼마로 낮아지는지 계산")
+
+                wb1, wb2 = st.columns(2)
+                w_add_amt2  = wb1.number_input("추가 매수 금액 (원)", min_value=0,
+                                               value=1_000_000, step=100_000, format="%d",
+                                               key=f"w_addamt_{_sel_inline}")
+                w_add_price2 = wb2.number_input("추가 매수 단가 (원)", min_value=1,
+                                                value=int(w_cur), step=100, format="%d",
+                                                key=f"w_aprice2_{_sel_inline}")
+
+                if w_add_amt2 > 0 and w_add_price2 > 0:
+                    add_qty2  = w_add_amt2 / w_add_price2
+                    new_avg2  = (w_avg * w_qty + w_add_price2 * add_qty2) / (w_qty + add_qty2)
+                    new_qty2  = w_qty + add_qty2
+                    new_eval2 = new_qty2 * w_cur
+                    new_unr2  = (w_cur - new_avg2) * new_qty2
+                    avg_drop  = w_avg - new_avg2
+
+                    rd1, rd2, rd3, rd4 = st.columns(4)
+                    rd1.metric("매수 가능 수량",    f"{add_qty2:,.1f}주")
+                    rd2.metric("물타기 후 평균단가", f"₩{new_avg2:,.0f}",
+                               delta=f"-₩{avg_drop:,.0f} ({avg_drop/w_avg*100:.1f}%↓)",
+                               delta_color="off")
+                    rd3.metric("물타기 후 총수량",   f"{new_qty2:,.1f}주")
+                    rd4.metric("물타기 후 미실현손익", f"₩{new_unr2:,.0f}",
+                               delta=f"{(w_cur-new_avg2)/new_avg2*100:+.2f}%",
+                               delta_color="normal" if new_unr2 >= 0 else "inverse")
 
 
 # ════════════════════════════════════════
