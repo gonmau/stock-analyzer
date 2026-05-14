@@ -432,22 +432,17 @@ def _sort_trades_chronological(df):
     return sort_trades_for_settlement_export(df, same_day_buy_first=buy_first)
 
 
-def calculate_positions(df):
-    if df.empty:
-        return pd.DataFrame()
-    df = _sort_trades_chronological(df)
+def _calc_positions_single(df):
+    """단일 계좌(또는 단일 종목) 거래 내역으로 포지션 계산. 내부 사용."""
     positions = {}
-
     for _, row in df.iterrows():
-        symbol       = row.get('종목키', row['종목명'])
-        display_name = row['종목명']
-        qty   = abs(float(row.get('거래수량', 0)))
-        price = float(row.get('거래단가', 0))
-        fee   = float(row.get('수수료', 0)) + float(row.get('제세금', 0))
-        ttype = row.get('매매유형', 'ETC')
+        symbol = row.get('종목키', row['종목명'])
+        qty    = abs(float(row.get('거래수량', 0)))
+        price  = float(row.get('거래단가', 0))
+        fee    = float(row.get('수수료', 0)) + float(row.get('제세금', 0))
+        ttype  = row.get('매매유형', 'ETC')
 
         if symbol not in positions:
-            # display_name: 종목키(정규화명) 우선, 없으면 첫 종목명
             positions[symbol] = {
                 'display_name': symbol,
                 'qty': 0.0, 'avg_price': 0.0, 'holding_cost': 0.0,
@@ -475,9 +470,8 @@ def calculate_positions(df):
                     p['holding_cost']   -= aq * p['avg_price']
                     p['total_sell_amt'] += aq * price
                 else:
-                    # 단가 0 매도(출고 등): 실현손익·매도금액은 0이어도 보유수량·원가는 감소해야 함
                     p['holding_cost'] -= aq * p['avg_price']
-                    p['realized_pnl']   -= fee
+                    p['realized_pnl'] -= fee
             p['qty'] -= qty
             if p['qty'] < 0:
                 p['qty'] = 0.0; p['holding_cost'] = 0.0; p['avg_price'] = 0.0
@@ -488,10 +482,56 @@ def calculate_positions(df):
             p['total_sell_qty'] += qty
             p['total_fee']      += fee
 
+    return positions
+
+
+def calculate_positions(df):
+    """
+    계좌별로 독립적으로 포지션을 계산한 후 합산.
+    두 계좌에 같은 종목이 있을 때 계좌 간 매수/매도가 서로 영향주지 않도록 방지.
+    """
+    if df.empty:
+        return pd.DataFrame()
+    df = _sort_trades_chronological(df)
+
+    accounts = df['계좌'].dropna().unique() if '계좌' in df.columns else [None]
+
+    # 계좌별 포지션 계산
+    all_pos = {}  # symbol → 합산 포지션
+    for acc in accounts:
+        if acc is None:
+            acc_df = df
+        else:
+            acc_df = df[df['계좌'] == acc]
+        pos = _calc_positions_single(acc_df)
+        for sym, p in pos.items():
+            if sym not in all_pos:
+                all_pos[sym] = {
+                    'display_name': p['display_name'],
+                    'qty': 0.0, 'avg_price': 0.0, 'holding_cost': 0.0,
+                    'total_buy_qty': 0.0, 'total_sell_qty': 0.0,
+                    'total_buy_amt': 0.0, 'total_sell_amt': 0.0,
+                    'realized_pnl': 0.0, 'total_fee': 0.0,
+                }
+            ap = all_pos[sym]
+            # 보유원가 합산 후 평균단가 재계산
+            new_cost = ap['holding_cost'] + p['holding_cost']
+            new_qty  = ap['qty'] + p['qty']
+            ap['holding_cost']   = new_cost
+            ap['qty']            = new_qty
+            ap['avg_price']      = new_cost / new_qty if new_qty > 0 else 0.0
+            ap['total_buy_qty']  += p['total_buy_qty']
+            ap['total_sell_qty'] += p['total_sell_qty']
+            ap['total_buy_amt']  += p['total_buy_amt']
+            ap['total_sell_amt'] += p['total_sell_amt']
+            ap['realized_pnl']   += p['realized_pnl']
+            ap['total_fee']      += p['total_fee']
+
     rows = []
-    for sym, p in positions.items():
+    for sym, p in all_pos.items():
         rows.append({
-            '종목키': sym, '종목명': p['display_name'],
+            '종목키':      sym,
+            '종목명':      p['display_name'],
             '잔고수량':    round(p['qty']),
             '평균단가':    round(p['avg_price']),
             '보유원가':    round(p['holding_cost']),
