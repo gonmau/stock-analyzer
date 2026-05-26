@@ -133,12 +133,31 @@ def resolve_tickers_yf(holding_df: pd.DataFrame) -> dict:
     prices = fetch_current_prices_yf(tuple(all_candidates))
 
     # 3단계: 유효한(가격이 있는) 티커 선택
+    # 사용자 정의 티커는 가격 조회 실패해도 강제 적용
     mapping: dict[str, str] = {}
     for key, ticker_list in candidates.items():
-        for t in ticker_list:
-            if t in prices:
-                mapping[key] = t
-                break
+        # 첫 번째 티커가 사용자 정의인지 확인
+        is_user_defined = False
+        if ticker_list:
+            first_ticker = ticker_list[0]
+            # holding_df에서 해당 row 찾기
+            row = holding_df[holding_df['종목키'] == key].iloc[0] if len(holding_df[holding_df['종목키'] == key]) > 0 else None
+            if row is not None:
+                name = row.get('종목명', key)
+                norm = normalize_stock_name(name)
+                is_user_defined = (name in user_map and user_map[name] == first_ticker) or \
+                                (norm in user_map and user_map[norm] == first_ticker) or \
+                                (key in user_map and user_map[key] == first_ticker)
+        
+        if is_user_defined and ticker_list:
+            # 사용자 정의는 무조건 사용
+            mapping[key] = ticker_list[0]
+        else:
+            # 일반 티커는 가격이 있는 것만 사용
+            for t in ticker_list:
+                if t in prices:
+                    mapping[key] = t
+                    break
     return mapping
 
 
@@ -896,6 +915,36 @@ with st.sidebar:
     st.caption("내장 코드에 없는 종목은 여기에 추가하세요. 종목명은 거래내역과 동일하게 입력.")
 
     utm = st.session_state.get('_user_ticker_map', {})
+    
+    # 현재 보유 종목의 티커 매핑 상태 표시
+    if 'combined_df' in st.session_state and not st.session_state['combined_df'].empty:
+        with st.expander("🔍 현재 보유 종목의 티커 매핑 상태"):
+            combined_df = st.session_state['combined_df']
+            _holding = summarize_holdings(combined_df)
+            if not _holding.empty and _holding['잔고수량'].sum() > 0:
+                _pos = _holding[_holding['잔고수량'] > 0].copy()
+                _ticker_map = resolve_tickers_yf(_pos)
+                
+                st.caption("✅ = 티커 매핑됨 (현재가 조회 가능) | ❌ = 티커 없음 (수동 입력 필요)")
+                for _, row in _pos.iterrows():
+                    종목키 = row['종목키']
+                    종목명 = row.get('종목명', 종목키)
+                    종목코드 = str(row.get('종목코드6', '') or '').strip()
+                    
+                    매핑티커 = _ticker_map.get(종목키, None)
+                    사용자정의 = 종목명 in utm or normalize_stock_name(종목명) in utm or 종목키 in utm
+                    
+                    col1, col2, col3, col4 = st.columns([3, 2, 3, 2])
+                    if 매핑티커:
+                        col1.markdown(f"✅ **{종목명}**")
+                        col2.text(f"코드: {종목코드 or '-'}")
+                        col3.text(f"티커: {매핑티커}")
+                        col4.text("🔧 사용자 정의" if 사용자정의 else "🤖 자동")
+                    else:
+                        col1.markdown(f"❌ **{종목명}**")
+                        col2.text(f"코드: {종목코드 or '-'}")
+                        col3.text("티커: 없음")
+                        col4.markdown("⬇️ **아래 입력**")
 
     # 기존 매핑 표시 + 삭제
     if utm:
