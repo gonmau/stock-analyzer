@@ -623,6 +623,8 @@ def render_lot_tabs(combined_df, symbol_key, live_price, pos_row):
         lots_df['단가손익']   = lots_df['매수단가'].apply(lambda p: int(live_price - p))
         lots_df['수익률(%)']  = lots_df['매수단가'].apply(
             lambda p: round((live_price - p) / p * 100, 2) if p > 0 else 0)
+        lots_df['회복필요상승률(%)'] = lots_df['매수단가'].apply(
+            lambda p: round((p - live_price) / live_price * 100, 2) if p > live_price and live_price > 0 else None)
         lots_df['미실현손익'] = (lots_df['단가손익'] * lots_df['잔여수량']).astype(int)
         lots_df['매수금액']   = (lots_df['매수단가'] * lots_df['잔여수량']).astype(int)
         lots_df['평가금액']   = (live_price * lots_df['잔여수량']).astype(int)
@@ -641,8 +643,8 @@ def render_lot_tabs(combined_df, symbol_key, live_price, pos_row):
         lc4.metric("총 평가금액",         f"₩{lots_df['평가금액'].sum():,.0f}")
 
         disp = lots_df[['매수일','매수단가','매수수량','잔여수량',
-                         '현재가','단가손익','수익률(%)','미실현손익',
-                         '매수금액','평가금액','계좌']]
+                         '현재가','단가손익','수익률(%)','회복필요상승률(%)',
+                         '미실현손익','매수금액','평가금액','계좌']]
 
         def _hl(row):
             try: bg = '#1a3a1a' if float(row.get('미실현손익', 0)) >= 0 else '#3a1a1a'
@@ -659,10 +661,12 @@ def render_lot_tabs(combined_df, symbol_key, live_price, pos_row):
 
         st.dataframe(
             disp.style.apply(_hl, axis=1)
-            .map(_cl, subset=['단가손익','수익률(%)','미실현손익'])
+            .map(_cl, subset=['단가손익','수익률(%)','회복필요상승률(%)','미실현손익'])
             .format({'매수단가':'{:,.0f}','매수수량':'{:,.0f}','잔여수량':'{:,.0f}',
                      '현재가':'{:,.0f}','단가손익':'{:+,.0f}','수익률(%)':'{:+.2f}',
-                     '미실현손익':'{:+,.0f}','매수금액':'{:,.0f}','평가금액':'{:,.0f}'}),
+                     '회복필요상승률(%)':'{:+.2f}',
+                     '미실현손익':'{:+,.0f}','매수금액':'{:,.0f}','평가금액':'{:,.0f}'},
+                    na_rep='-'),
             use_container_width=True,
             height=min(80 + len(lots_df) * 38, 500),
         )
@@ -1234,6 +1238,11 @@ with tab1:
         disp_pos['평가금액']   = disp_pos.apply(
             lambda r: int(r['현재가'] * r['잔고수량'])
                       if pd.notna(r.get('현재가')) and r['잔고수량'] > 0 else None, axis=1)
+        # 손실 회복에 필요한 상승률 계산
+        disp_pos['회복필요상승률(%)'] = disp_pos.apply(
+            lambda r: round((r['평균단가'] - r['현재가']) / r['현재가'] * 100, 2)
+                      if pd.notna(r.get('현재가')) and r['현재가'] > 0 and r['평균단가'] > r['현재가'] and r['잔고수량'] > 0 
+                      else None, axis=1)
 
         # 현재 보유 로트 기준 최초매수일 / 보유일수 / 매수횟수 계산
         # FIFO 잔여 로트 중 가장 오래된 날짜 사용 (완전 매도 후 재매수 시 재매수일 기준)
@@ -1268,13 +1277,14 @@ with tab1:
             _m3.metric("총 보유원가",  f"₩{_cost:,.0f}")
 
         base_cols = ['종목명', '잔고수량', '평균단가', '현재가', '수익률(%)',
-                     '미실현손익', '평가금액', '보유원가', '실현손익',
+                     '회복필요상승률(%)', '미실현손익', '평가금액', '보유원가', '실현손익',
                      '최초매수일', '보유일수', '매수횟수']
         base_cols = [c for c in base_cols if c in disp_pos.columns]
         fmt = {
             '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '현재가': '{:,.0f}',
             '보유원가': '{:,.0f}', '실현손익': '{:,.0f}',
             '미실현손익': '{:,.0f}', '평가금액': '{:,.0f}', '수익률(%)': '{:+.2f}',
+            '회복필요상승률(%)': '{:+.2f}',
             '보유일수': '{:,.0f}', '매수횟수': '{:,.0f}',
         }
 
@@ -1297,7 +1307,7 @@ with tab1:
         st.dataframe(
             disp_pos[base_cols].sort_values('잔고수량', ascending=False)
             .style.apply(highlight_holding, axis=1)
-            .map(_color_pnl_cell, subset=['미실현손익', '수익률(%)'])
+            .map(_color_pnl_cell, subset=['미실현손익', '수익률(%)', '회복필요상승률(%)'])
             .format(fmt, na_rep='-'),
             use_container_width=True, height=450
         )
