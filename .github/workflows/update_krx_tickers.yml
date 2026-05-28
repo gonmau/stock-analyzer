@@ -2,9 +2,8 @@ name: Update KRX Tickers
 
 on:
   schedule:
-    # 매일 오전 9시 20분 KST (= UTC 00:20), 평일만
-    - cron: '20 0 * * 1-5'
-  workflow_dispatch:  # 수동 실행 버튼
+    - cron: '20 0 * * 1-5'  # 평일 오전 9:20 KST
+  workflow_dispatch:
 
 jobs:
   update-tickers:
