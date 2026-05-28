@@ -97,6 +97,61 @@ def fetch_current_prices_yf(yf_tickers: tuple) -> dict:
         return {}
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_support_resistance(yf_ticker: str) -> dict:
+    """
+    단기 지지선·저항선 계산 (최근 60일 일봉 기준).
+    피벗 포인트 + 스윙 고/저점 방식.
+    반환: {
+        'pivot': float, 'r1': float, 'r2': float, 's1': float, 's2': float,
+        'swing_high': float, 'swing_low': float,
+        'recent_high': float, 'recent_low': float,
+    }
+    """
+    import yfinance as yf
+    try:
+        df = yf.download(yf_ticker, period="60d", interval="1d",
+                         auto_adjust=True, progress=False)
+        if df is None or len(df) < 5:
+            return {}
+
+        # MultiIndex 처리
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        df = df[['High', 'Low', 'Close']].dropna()
+        if len(df) < 5:
+            return {}
+
+        # 최근 영업일 기준 피벗 포인트 (전일 H/L/C)
+        prev = df.iloc[-2]
+        h, l, c = float(prev['High']), float(prev['Low']), float(prev['Close'])
+        pivot = (h + l + c) / 3
+        r1 = 2 * pivot - l
+        r2 = pivot + (h - l)
+        s1 = 2 * pivot - h
+        s2 = pivot - (h - l)
+
+        # 20일 스윙 고/저점 (로컬 최대/최소)
+        recent = df.tail(20)
+        swing_high = float(recent['High'].max())
+        swing_low  = float(recent['Low'].min())
+
+        # 5일 최근 고/저 (단기 지지/저항)
+        last5 = df.tail(5)
+        recent_high = float(last5['High'].max())
+        recent_low  = float(last5['Low'].min())
+
+        return {
+            'pivot': round(pivot), 'r1': round(r1), 'r2': round(r2),
+            's1': round(s1), 's2': round(s2),
+            'swing_high': round(swing_high), 'swing_low': round(swing_low),
+            'recent_high': round(recent_high), 'recent_low': round(recent_low),
+        }
+    except Exception:
+        return {}
+
+
 def resolve_tickers_yf(holding_df: pd.DataFrame) -> dict:
     """
     종목키 → yfinance 티커 매핑.
@@ -1275,6 +1330,46 @@ with tab1:
     elif 'live_prices_time' in st.session_state:
         _col_msg.caption(f"마지막 조회: {st.session_state['live_prices_time']} (재조회하려면 버튼을 누르세요)")
 
+    # ── 목표가 / 손절가 설정 ──────────────────────────────
+    if 'price_alerts' not in st.session_state:
+        st.session_state['price_alerts'] = {}
+
+    _alert_stocks = disp_pos[disp_pos['잔고수량'] > 0]['종목명'].dropna().tolist()
+    if _alert_stocks:
+        with st.expander("🎯 목표가 / 손절가 설정", expanded=False):
+            st.caption("설정한 가격에 도달하면 보유 테이블 행 색상으로 표시됩니다.")
+            _pa = st.session_state['price_alerts']
+            _acols = st.columns(4)
+            _acols[0].markdown("**종목**")
+            _acols[1].markdown("**목표가 (원)**")
+            _acols[2].markdown("**손절가 (원)**")
+            _acols[3].markdown("**초기화**")
+            for _sn in _alert_stocks:
+                _sk2 = disp_pos[disp_pos['종목명'] == _sn]['종목키'].iloc[0]
+                _avg2 = float(disp_pos[disp_pos['종목명'] == _sn]['평균단가'].iloc[0])
+                _cur_alert = _pa.get(_sk2, {})
+                _ac0, _ac1, _ac2, _ac3 = st.columns(4)
+                _ac0.markdown(f"**{_sn}**")
+                _new_target = _ac1.number_input(
+                    "목표가", min_value=0, step=100,
+                    value=int(_cur_alert.get('target', 0)),
+                    key=f"alert_t_{_sk2}", label_visibility="collapsed"
+                )
+                _new_stop = _ac2.number_input(
+                    "손절가", min_value=0, step=100,
+                    value=int(_cur_alert.get('stoplos', 0)),
+                    key=f"alert_s_{_sk2}", label_visibility="collapsed"
+                )
+                if _ac3.button("🗑", key=f"alert_del_{_sk2}"):
+                    _pa.pop(_sk2, None)
+                    st.rerun()
+                # 값 즉시 반영
+                if _new_target > 0 or _new_stop > 0:
+                    _pa[_sk2] = {'target': _new_target, 'stoplos': _new_stop}
+                elif _sk2 in _pa:
+                    _pa.pop(_sk2)
+            st.session_state['price_alerts'] = _pa
+
     # ── 테이블 구성 ──
     _live = st.session_state.get('live_prices', {})
     disp_pos = disp_pos.copy()
@@ -1352,6 +1447,17 @@ with tab1:
         def highlight_holding(row):
             if row.get('잔고수량', 0) <= 0:
                 return [''] * len(row)
+            _sk_r  = disp_pos[disp_pos['종목명'] == row.get('종목명', '')]['종목키'].iloc[0] \
+                     if '종목명' in row and len(disp_pos[disp_pos['종목명'] == row.get('종목명', '')]) > 0 else ''
+            _alert_r = st.session_state.get('price_alerts', {}).get(_sk_r, {})
+            _cur_r   = row.get('현재가', None)
+            _target_r  = _alert_r.get('target', 0)
+            _stoplos_r = _alert_r.get('stoplos', 0)
+            if _cur_r and pd.notna(_cur_r):
+                if _target_r > 0 and float(_cur_r) >= _target_r:
+                    return ['background-color:#0d5c2e;color:white;font-weight:bold'] * len(row)
+                if _stoplos_r > 0 and float(_cur_r) <= _stoplos_r:
+                    return ['background-color:#7a0000;color:white;font-weight:bold'] * len(row)
             unr = row.get('미실현손익', None)
             bg  = '#1a3a5c' if (unr is None or pd.isna(unr) or float(unr) >= 0) else '#3a1a1a'
             return [f'background-color:{bg};color:white'] * len(row)
@@ -1437,7 +1543,7 @@ with tab1:
             st.divider()
 
             # ── 전체 거래내역 테이블 ──
-            _itab1, _itab2, _itab3 = st.tabs(["📋 전체 거래내역", "📦 매수 로트별 손익", "💧 물타기 계산기"])
+            _itab1, _itab2, _itab3, _itab4 = st.tabs(["📋 전체 거래내역", "📦 매수 로트별 손익", "💧 물타기 계산기", "📊 지지/저항선"])
 
             with _itab1:
                 _sc = ['거래일자','매매구분','거래수량','거래단가','거래금액',
@@ -1560,6 +1666,112 @@ with tab1:
                     rd4.metric("물타기 후 미실현손익", f"₩{new_unr2:,.0f}",
                                delta=f"{(w_cur-new_avg2)/new_avg2*100:+.2f}%",
                                delta_color="normal" if new_unr2 >= 0 else "inverse")
+
+            with _itab4:
+                # 지지선/저항선 탭
+                _sr_ticker = ticker_map.get(_sym_key) if 'ticker_map' in dir() and ticker_map else None
+                if not _sr_ticker:
+                    # ticker_map이 없을 경우 직접 resolve
+                    _sr_holding = disp_pos[disp_pos['종목키'] == _sym_key].copy()
+                    if '종목코드6' in combined_df.columns:
+                        _code_src2 = combined_df.drop_duplicates('종목키')[['종목키','종목코드6']]
+                        _sr_holding = _sr_holding.merge(_code_src2, on='종목키', how='left')
+                    _sr_map = resolve_tickers_yf(_sr_holding)
+                    _sr_ticker = _sr_map.get(_sym_key)
+
+                if not _sr_ticker:
+                    st.info("현재가 조회 후 티커가 매핑된 종목만 지지/저항선을 계산할 수 있습니다.\n\n상단 '📡 현재가 조회' 버튼을 먼저 눌러주세요.")
+                else:
+                    with st.spinner("60일 OHLC 데이터 분석 중..."):
+                        _sr = fetch_support_resistance(_sr_ticker)
+
+                    if not _sr:
+                        st.warning("데이터를 가져오지 못했습니다.")
+                    else:
+                        _cur_sr = _lp_inline or 0
+                        _avg_sr = float(_pos_inline.iloc[0]['평균단가']) if not _pos_inline.empty else 0
+
+                        st.caption(f"**{_sel_inline}** 단기 지지선·저항선 (최근 60일 일봉 기준)")
+
+                        # ── 피벗 포인트 ──
+                        st.markdown("##### 📌 피벗 포인트 (전일 기준)")
+                        _pc1, _pc2, _pc3, _pc4, _pc5 = st.columns(5)
+
+                        def _sr_delta(price):
+                            if _cur_sr and _cur_sr > 0:
+                                return f"{(price - _cur_sr) / _cur_sr * 100:+.2f}%"
+                            return None
+
+                        _pc1.metric("S2 (2차 지지)", f"₩{_sr['s2']:,}", _sr_delta(_sr['s2']),
+                                    delta_color="inverse" if _sr['s2'] < (_cur_sr or 0) else "normal")
+                        _pc2.metric("S1 (1차 지지)", f"₩{_sr['s1']:,}", _sr_delta(_sr['s1']),
+                                    delta_color="inverse" if _sr['s1'] < (_cur_sr or 0) else "normal")
+                        _pc3.metric("피벗",          f"₩{_sr['pivot']:,}", _sr_delta(_sr['pivot']), delta_color="off")
+                        _pc4.metric("R1 (1차 저항)", f"₩{_sr['r1']:,}", _sr_delta(_sr['r1']),
+                                    delta_color="normal" if _sr['r1'] > (_cur_sr or 0) else "inverse")
+                        _pc5.metric("R2 (2차 저항)", f"₩{_sr['r2']:,}", _sr_delta(_sr['r2']),
+                                    delta_color="normal" if _sr['r2'] > (_cur_sr or 0) else "inverse")
+
+                        st.divider()
+
+                        # ── 스윙 고/저 ──
+                        st.markdown("##### 📈 스윙 고/저점 (20일)")
+                        _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+                        _sc1.metric("20일 고점 (저항)", f"₩{_sr['swing_high']:,}", _sr_delta(_sr['swing_high']))
+                        _sc2.metric("20일 저점 (지지)", f"₩{_sr['swing_low']:,}",  _sr_delta(_sr['swing_low']))
+                        _sc3.metric("5일 고점",         f"₩{_sr['recent_high']:,}", _sr_delta(_sr['recent_high']))
+                        _sc4.metric("5일 저점",         f"₩{_sr['recent_low']:,}",  _sr_delta(_sr['recent_low']))
+
+                        # ── 현재가 위치 시각화 ──
+                        if _cur_sr:
+                            st.divider()
+                            st.markdown("##### 📍 현재가 위치")
+                            _levels = sorted([
+                                ('S2', _sr['s2']), ('S1', _sr['s1']),
+                                ('피벗', _sr['pivot']),
+                                ('R1', _sr['r1']), ('R2', _sr['r2']),
+                                ('20일저점', _sr['swing_low']), ('20일고점', _sr['swing_high']),
+                                ('현재가', int(_cur_sr)),
+                            ], key=lambda x: x[1])
+
+                            _rows = []
+                            for _lbl, _lprice in _levels:
+                                _is_cur = _lbl == '현재가'
+                                _diff   = (_lprice - _cur_sr) / _cur_sr * 100
+                                _rows.append({
+                                    '구분': f"{'▶ ' if _is_cur else ''}{_lbl}",
+                                    '가격': f"₩{_lprice:,}",
+                                    '현재가 대비': f"{_diff:+.2f}%" if not _is_cur else "—",
+                                    '의미': '📍 현재가' if _is_cur else
+                                            ('🟢 지지' if _lprice < _cur_sr else '🔴 저항'),
+                                })
+                            _sr_df = pd.DataFrame(_rows)
+
+                            def _color_sr_row(row):
+                                if '▶' in str(row['구분']):
+                                    return ['background-color:#2c4a7c;color:white;font-weight:bold'] * len(row)
+                                if '🟢' in str(row['의미']):
+                                    return ['background-color:#1a3a2a;color:#90ee90'] * len(row)
+                                if '🔴' in str(row['의미']):
+                                    return ['background-color:#3a1a1a;color:#ff9999'] * len(row)
+                                return [''] * len(row)
+
+                            st.dataframe(
+                                _sr_df.style.apply(_color_sr_row, axis=1),
+                                use_container_width=True, hide_index=True
+                            )
+
+                            # 평균단가도 표시
+                            if _avg_sr > 0:
+                                _nearest_sup = max([p for _, p in _levels if p < _cur_sr and _ != '현재가'], default=None)
+                                _nearest_res = min([p for _, p in _levels if p > _cur_sr and _ != '현재가'], default=None)
+                                _info_parts = []
+                                if _nearest_sup:
+                                    _info_parts.append(f"직전 지지선: **₩{_nearest_sup:,}** ({(_nearest_sup-_cur_sr)/_cur_sr*100:+.2f}%)")
+                                if _nearest_res:
+                                    _info_parts.append(f"직전 저항선: **₩{_nearest_res:,}** ({(_nearest_res-_cur_sr)/_cur_sr*100:+.2f}%)")
+                                if _info_parts:
+                                    st.info("  |  ".join(_info_parts))
 
 
 # ════════════════════════════════════════
