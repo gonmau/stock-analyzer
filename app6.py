@@ -1606,23 +1606,87 @@ with tab2:
 
     st.divider()
     trades = st.session_state.manual_trades
+    if 'editing_trade_idx' not in st.session_state:
+        st.session_state.editing_trade_idx = None
+
     if trades:
         st.write(f"**수동 입력 거래 목록** ({len(trades)}건)")
         for idx, t in enumerate(trades):
-            col_info, col_del = st.columns([11, 1])
+            col_info, col_edit, col_del = st.columns([10, 1, 1])
             icon = "🔴" if t['매매유형'] == '매수' else "🔵"
             col_info.markdown(
                 f"`{t['날짜']}` &nbsp; {icon} **{t['매매유형']}** &nbsp; "
                 f"**{t['종목명']}** &nbsp; {int(t['수량']):,}주 @{int(t['단가']):,}원 &nbsp; "
                 f"수수료 {int(t.get('수수료', 0)):,}원 &nbsp; _(계좌: {t['계좌']})_"
             )
+            if col_edit.button("✏️", key=f"edit_{idx}", help="수정"):
+                st.session_state.editing_trade_idx = idx
+                st.rerun()
             if col_del.button("🗑", key=f"del_{idx}", help="삭제"):
+                if st.session_state.editing_trade_idx == idx:
+                    st.session_state.editing_trade_idx = None
                 st.session_state.manual_trades.pop(idx)
                 st.rerun()
+
+            # 수정 폼 (해당 항목 아래에 인라인 표시)
+            if st.session_state.editing_trade_idx == idx:
+                with st.form(f"edit_trade_form_{idx}"):
+                    st.caption(f"✏️ {idx+1}번 거래 수정")
+                    e1, e2, e3 = st.columns(3)
+                    e4, e5, e6 = st.columns(3)
+                    try:
+                        edit_date_val = date.fromisoformat(t['날짜'])
+                    except Exception:
+                        edit_date_val = date.today()
+                    edit_date  = e1.date_input("거래일자", value=edit_date_val, key=f"edate_{idx}")
+                    edit_type  = e2.selectbox("매매구분", ["매수", "매도"],
+                                              index=0 if t['매매유형'] == '매수' else 1,
+                                              key=f"etype_{idx}")
+                    edit_name  = e3.text_input("종목명", value=t['종목명'], key=f"ename_{idx}")
+                    edit_qty   = e4.number_input("수량 (주)", min_value=1, value=int(t['수량']), step=1, key=f"eqty_{idx}")
+                    edit_price = e5.number_input("단가 (원)", min_value=1, value=int(t['단가']), step=100, key=f"eprice_{idx}")
+                    edit_fee   = e6.number_input("수수료 (원)", min_value=0, value=int(t.get('수수료', 0)), step=10, key=f"efee_{idx}")
+
+                    existing_accounts_e = sorted(combined_df['계좌'].dropna().astype(str).unique().tolist())
+                    account_options_e   = existing_accounts_e + ['직접입력']
+                    cur_acc = t['계좌']
+                    acc_idx_e = account_options_e.index(cur_acc) if cur_acc in account_options_e else len(account_options_e) - 1
+                    sel_acc_e = st.selectbox("계좌", account_options_e, index=acc_idx_e, key=f"eacc_{idx}")
+                    if sel_acc_e == '직접입력':
+                        edit_account = st.text_input("계좌명 직접 입력",
+                                                     value=cur_acc if cur_acc not in existing_accounts_e else "수동입력",
+                                                     key=f"eacc_txt_{idx}")
+                    else:
+                        edit_account = sel_acc_e
+
+                    save_col, cancel_col = st.columns(2)
+                    save_btn   = save_col.form_submit_button("💾 저장", type="primary", use_container_width=True)
+                    cancel_btn = cancel_col.form_submit_button("취소", use_container_width=True)
+
+                if save_btn:
+                    if not edit_name.strip():
+                        st.error("종목명을 입력해주세요.")
+                    else:
+                        st.session_state.manual_trades[idx] = {
+                            '날짜':    str(edit_date),
+                            '매매유형': edit_type,
+                            '종목명':  edit_name.strip(),
+                            '수량':    int(edit_qty),
+                            '단가':    int(edit_price),
+                            '수수료':  int(edit_fee),
+                            '계좌':    edit_account,
+                        }
+                        st.session_state.editing_trade_idx = None
+                        st.success(f"✅ {edit_date} {edit_type} {edit_name.strip()} 수정 완료")
+                        st.rerun()
+                if cancel_btn:
+                    st.session_state.editing_trade_idx = None
+                    st.rerun()
 
         st.divider()
         if st.button("🗑️ 전체 수동 거래 삭제", type="secondary"):
             st.session_state.manual_trades = []
+            st.session_state.editing_trade_idx = None
             st.rerun()
     else:
         st.info("아직 수동 입력된 거래가 없습니다.")
