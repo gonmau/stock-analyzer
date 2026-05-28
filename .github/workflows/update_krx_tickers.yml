@@ -2,7 +2,7 @@ name: Update KRX Tickers
 
 on:
   schedule:
-    # 매일 오전 9시 20분 KST (= UTC 00:20) - 장 시작 직후
+    # 매일 오전 9시 20분 KST (= UTC 00:20), 평일만
     - cron: '20 0 * * 1-5'
   workflow_dispatch:  # 수동 실행 버튼
 
@@ -20,9 +20,12 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pykrx pandas
+        run: pip install requests
 
       - name: Generate krx_tickers.json
+        env:
+          KRX_ID: ${{ secrets.KRX_ID }}
+          KRX_PW: ${{ secrets.KRX_PW }}
         run: python generate_krx_tickers.py
 
       - name: Commit and push if changed
