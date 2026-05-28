@@ -13,14 +13,27 @@ st.set_page_config(page_title="주식 종목별 손익 분석기", layout="wide"
 # yfinance 현재가 조회
 # ==========================================
 
+_KRX_TICKERS_URL = (
+    "https://raw.githubusercontent.com/gonmau/stock-analyzer/main/krx_tickers.json"
+)
+
 @st.cache_data(ttl=86400, show_spinner=False)  # 하루 캐시
 def load_ticker_map() -> dict:
     """
-    krx_tickers.csv → 종목명: yfinance 티커 딕셔너리 로드.
-    KOSPI → .KS / KOSDAQ → .KQ / US → 그대로
-    파일 없으면 빈 dict 반환.
+    GitHub raw URL → 종목명: yfinance 티커 딕셔너리 로드.
+    GitHub Actions가 매일 갱신하는 krx_tickers.json 사용.
+    실패 시 로컬 krx_tickers.csv → 최후 수단으로 빈 dict.
     """
-    import os
+    import urllib.request, os
+
+    # 1순위: GitHub JSON
+    try:
+        with urllib.request.urlopen(_KRX_TICKERS_URL, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        pass
+
+    # 2순위: 로컬 CSV (기존 방식, 폴백)
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "krx_tickers.csv")
     if not os.path.exists(path):
         return {}
@@ -1847,6 +1860,7 @@ with tab5:
     st.caption("매도 체결일 기준으로 실현된 손익을 일/주/월/연 단위로 집계합니다.")
 
     # 매도 거래 + 실현손익 계산
+    @st.cache_data
     def build_pnl_timeseries(_df):
         """전체 거래에서 종목별로 매도 실현손익을 날짜 단위로 집계."""
         if _df.empty:
