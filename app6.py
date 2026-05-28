@@ -13,27 +13,14 @@ st.set_page_config(page_title="주식 종목별 손익 분석기", layout="wide"
 # yfinance 현재가 조회
 # ==========================================
 
-_KRX_TICKERS_URL = (
-    "https://raw.githubusercontent.com/gonmau/stock-analyzer/main/krx_tickers.json"
-)
-
 @st.cache_data(ttl=86400, show_spinner=False)  # 하루 캐시
 def load_ticker_map() -> dict:
     """
-    GitHub raw URL → 종목명: yfinance 티커 딕셔너리 로드.
-    GitHub Actions가 매일 갱신하는 krx_tickers.json 사용.
-    실패 시 로컬 krx_tickers.csv → 최후 수단으로 빈 dict.
+    krx_tickers.csv → 종목명: yfinance 티커 딕셔너리 로드.
+    KOSPI → .KS / KOSDAQ → .KQ / US → 그대로
+    파일 없으면 빈 dict 반환.
     """
-    import urllib.request, os
-
-    # 1순위: GitHub JSON
-    try:
-        with urllib.request.urlopen(_KRX_TICKERS_URL, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        pass
-
-    # 2순위: 로컬 CSV (기존 방식, 폴백)
+    import os
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "krx_tickers.csv")
     if not os.path.exists(path):
         return {}
@@ -182,6 +169,7 @@ ALIAS_MAP = {
     '안철수연구소': '안랩',
     '다음': '카카오', '다음카카오': '카카오',
     '하이닉스': 'SK하이닉스', '에스케이하이닉스': 'SK하이닉스',
+    '현대차': '현대자동차',
     '한국항공우주산업': '한국항공우주',
     '넷마블게임즈': '넷마블',
     '텔콘알에프제약': '텔콘RF제약',
@@ -234,6 +222,8 @@ def normalize_stock_name(name):
     s = re.sub(r'[\[\]\(\)\-_,.]', '', s)
     s = re.sub(r'\s+', '', s)
     s = re.sub(r'(보통주|보통)$', '', s)
+    # 영문자 대문자 정규화: lg이노텍 → LG이노텍, sk하이닉스 → SK하이닉스
+    s = re.sub(r'[a-zA-Z]+', lambda m: m.group(0).upper(), s)
     s = ALIAS_MAP.get(s, s)   # 1차: 정규화명 → 종목키
     s = ALIAS_MAP.get(s, s)   # 2차: 종목키 → 표시명 (JYPEnt → JYP Ent. 등)
     return s
