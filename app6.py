@@ -947,18 +947,22 @@ def build_backup_excel():
 def _gh_headers() -> dict | None:
     """PAT_TOKEN → GitHub API 헤더. 없으면 None."""
     try:
-        token = st.secrets.get("PAT_TOKEN", "")
-        repo  = st.secrets.get("GITHUB_REPO", "gonmau/stock-analyzer")
-        if token:
-            return {
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "_repo": repo,
-            }
+        token = st.secrets["PAT_TOKEN"]
+        if not token or not str(token).strip():
+            return None
+        repo = "gonmau/stock-analyzer"
+        try:
+            repo = st.secrets["GITHUB_REPO"] or repo
+        except Exception:
+            pass
+        return {
+            "Authorization": f"Bearer {str(token).strip()}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "_repo": repo,
+        }
     except Exception:
-        pass
-    return None
+        return None
 
 def github_backup() -> tuple[bool, str]:
     """현재 백업 JSON을 GitHub 리포에 push."""
