@@ -69,8 +69,6 @@ def _build_norm_maps():
         # 원본 키도 저장
         _YF_NORM_MAP[_name] = _ticker
 
-_build_norm_maps()
-
 
 # KOSPI/KOSDAQ 판별: 간단히 코드 앞자리로 구분 (완전하진 않지만 실용적)
 _KOSDAQ_PREFIXES = ('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')
@@ -343,6 +341,10 @@ def normalize_stock_name(name):
     s = ALIAS_MAP.get(s, s)   # 1차: 정규화명 → 종목키
     s = ALIAS_MAP.get(s, s)   # 2차: 종목키 → 표시명 (JYPEnt → JYP Ent. 등)
     return s
+
+
+# normalize_stock_name 정의 후 역방향 맵 빌드
+_build_norm_maps()
 
 
 def parse_exclude_symbol_keys(text):
