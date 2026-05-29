@@ -62,12 +62,48 @@ def _is_us_ticker(ticker: str) -> bool:
     return bool(ticker) and '.' not in ticker and ticker.upper() == ticker
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+
+def _fetch_naver_price(code6: str) -> int | None:
+    """네이버 금융에서 종목코드 6자리 → 현재가. 실패 시 None."""
+    import urllib.request, json as _json
+    url = f"https://m.stock.naver.com/api/stock/{code6}/basic"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Referer":    "https://m.finance.naver.com/",
+        "Accept":     "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = _json.loads(r.read())
+            price = data.get("closePrice") or data.get("currentPrice") or data.get("stockPrice")
+            if price:
+                return int(str(price).replace(",", ""))
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(ttl=60, show_spinner=False)   # 1분 캐시 (네이버는 거의 실시간)
+def fetch_current_prices_naver(code6_map: tuple) -> dict:
+    """
+    code6_map: (('종목키', '005930'), ('종목키2', '263750'), ...)
+    반환: {'종목키': 71400, ...}
+    네이버 금융 기준 (약 10초 지연). 실패 종목은 제외.
+    """
+    result = {}
+    for key, code6 in code6_map:
+        price = _fetch_naver_price(code6)
+        if price:
+            result[key] = price
+    return result
+
+
+@st.cache_data(ttl=300, show_spinner=False)  # 5분 캐시 (폴백용)
 def fetch_current_prices_yf(yf_tickers: tuple) -> dict:
     """
     yf_tickers: ('005930.KS', '263750.KQ', ...)
     반환: {'005930.KS': 71400, '263750.KQ': 18500, ...}
-    5분 캐시.
+    15~20분 지연. 네이버 실패 시 폴백.
     """
     import yfinance as yf
     if not yf_tickers:
@@ -96,6 +132,7 @@ def fetch_current_prices_yf(yf_tickers: tuple) -> dict:
         return prices
     except Exception:
         return {}
+
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1322,28 +1359,50 @@ with tab1:
     if _col_btn.button("📡 현재가 조회 (실시간)", type="primary", use_container_width=True):
         with st.spinner("현재가를 가져오는 중..."):
             try:
-                import yfinance as _yf_chk  # noqa
                 _holding = disp_pos[disp_pos['잔고수량'] > 0].copy()
                 if '종목코드6' in combined_df.columns:
                     _code_src = combined_df.drop_duplicates('종목키')[['종목키', '종목코드6']]
                     _holding  = _holding.merge(_code_src, on='종목키', how='left')
-                ticker_map = resolve_tickers_yf(_holding)
-                if not ticker_map:
+
+                # ① 네이버 금융 (약 10초 지연)
+                _code6_pairs = []
+                for _, _hr in _holding.iterrows():
+                    _c6 = str(_hr.get('종목코드6', '') or '').strip()
+                    if _c6 and len(_c6) == 6 and _c6.isdigit():
+                        _code6_pairs.append((_hr['종목키'], _c6))
+
+                key_to_price = {}
+                if _code6_pairs:
+                    fetch_current_prices_naver.clear()
+                    key_to_price = fetch_current_prices_naver(tuple(_code6_pairs))
+
+                # ② 네이버 미조회 종목 → yfinance 폴백
+                _naver_miss_keys = [k for k, _ in _code6_pairs if k not in key_to_price]
+                if _naver_miss_keys or not _code6_pairs:
+                    ticker_map = resolve_tickers_yf(_holding)
+                    _fallback_tickers = {k: v for k, v in ticker_map.items() if k in _naver_miss_keys or not _code6_pairs}
+                    if _fallback_tickers:
+                        fetch_current_prices_yf.clear()
+                        _yf_prices = fetch_current_prices_yf(tuple(set(_fallback_tickers.values())))
+                        for _k, _t in _fallback_tickers.items():
+                            if _t in _yf_prices:
+                                key_to_price[_k] = _yf_prices[_t]
+
+                if not key_to_price:
                     _col_msg.warning("⚠️ 조회 가능한 종목이 없습니다. 거래내역에 종목코드6 컬럼이 있는지 확인하세요.")
                 else:
-                    fetch_current_prices_yf.clear()
-                    prices     = fetch_current_prices_yf(tuple(set(ticker_map.values())))
-                    key_to_price = {k: prices[v] for k, v in ticker_map.items() if v in prices}
                     st.session_state['live_prices']      = key_to_price
                     st.session_state['live_prices_time'] = datetime.now().strftime("%H:%M:%S")
-                    hit  = len(key_to_price)
-                    miss = len(_holding) - hit
-                    msg  = f"✅ {hit}/{len(_holding)}개 종목 조회 완료 — {st.session_state['live_prices_time']} 기준"
-                    if miss:
-                        msg += f"  (미조회 {miss}개: 종목코드6 없거나 상폐 등)"
+                    _naver_hit = len([k for k, _ in _code6_pairs if k in key_to_price])
+                    _yf_hit    = len(key_to_price) - _naver_hit
+                    _hit_total = len(key_to_price)
+                    _miss      = len(_holding) - _hit_total
+                    msg = f"✅ {_hit_total}/{len(_holding)}개 완료 — {st.session_state['live_prices_time']} 기준"
+                    msg += f"  (네이버 {_naver_hit}개"
+                    if _yf_hit: msg += f" + yfinance폴백 {_yf_hit}개"
+                    msg += ")"
+                    if _miss: msg += f"  · 미조회 {_miss}개"
                     _col_msg.success(msg)
-            except ImportError as e:
-                _col_msg.error(f"❌ yfinance import 실패: {e}")
             except Exception as e:
                 _col_msg.error(f"❌ 조회 실패: {e}")
                 st.exception(e)
