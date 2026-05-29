@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import re
 import json
 import io
+import os
 from datetime import date, datetime
 
 st.set_page_config(page_title="주식 종목별 손익 분석기", layout="wide")
