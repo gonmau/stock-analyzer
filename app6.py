@@ -1368,17 +1368,30 @@ with tab1:
                     _holding  = _holding.merge(_code_src, on='종목키', how='left')
 
                 # ① 네이버 금융 (약 10초 지연)
+                # 종목코드6 수집: combined_df 컬럼 우선, 없으면 _YF_NAME_MAP 역추출
                 _code6_pairs = []
-                for _, _hr in _holding.iterrows():
-                    _c6 = str(_hr.get('종목코드6', '') or '').strip()
-                    if _c6 and len(_c6) == 6 and _c6.isdigit():
-                        _code6_pairs.append((_hr['종목키'], _c6))
+                _key_to_code6 = {}
 
-                # 디버그: 종목코드6 상태 확인
-                with st.expander("🔧 종목코드6 디버그 (확인 후 삭제)", expanded=True):
-                    st.write("_holding 컬럼:", list(_holding.columns))
-                    st.write("종목코드6 샘플:", _holding[['종목키','종목코드6']].to_dict('records') if '종목코드6' in _holding.columns else "컬럼 없음")
-                    st.write("_code6_pairs:", _code6_pairs)
+                if '종목코드6' in _holding.columns:
+                    for _, _hr in _holding.iterrows():
+                        _c6 = str(_hr.get('종목코드6', '') or '').strip()
+                        if _c6 and len(_c6) == 6 and _c6.isdigit():
+                            _key_to_code6[_hr['종목키']] = _c6
+
+                # YF_NAME_MAP에서 역추출 (005930.KS → 005930)
+                if not _key_to_code6:
+                    for _, _hr in _holding.iterrows():
+                        _sk = _hr['종목키']
+                        _nm = _hr.get('종목명', _sk)
+                        for _lookup in [_sk, _nm]:
+                            _yf_t = _YF_NAME_MAP.get(str(_lookup), '')
+                            if _yf_t:
+                                _m = re.search(r'(\d{6})\.(KS|KQ)$', _yf_t)
+                                if _m:
+                                    _key_to_code6[_sk] = _m.group(1)
+                                    break
+
+                _code6_pairs = list(_key_to_code6.items())
 
                 key_to_price = {}
                 if _code6_pairs:
