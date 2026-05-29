@@ -947,8 +947,16 @@ def build_backup_excel():
 def _gh_headers() -> dict | None:
     """PAT_TOKEN → GitHub API 헤더. 없으면 None."""
     try:
-        token = st.secrets["PAT_TOKEN"]
-        if not token or not str(token).strip():
+        token = None
+        for _key in ["PAT_TOKEN", "GH_PAT", "GITHUB_TOKEN", "GITHUB_PAT"]:
+            try:
+                val = st.secrets[_key]
+                if val and str(val).strip():
+                    token = str(val).strip()
+                    break
+            except Exception:
+                continue
+        if not token:
             return None
         repo = "gonmau/stock-analyzer"
         try:
@@ -956,7 +964,7 @@ def _gh_headers() -> dict | None:
         except Exception:
             pass
         return {
-            "Authorization": f"Bearer {str(token).strip()}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "_repo": repo,
@@ -1289,6 +1297,16 @@ with st.sidebar:
 
     # ── GitHub 백업 / 복원 ──
     _gh_avail = _gh_headers() is not None
+    if not _gh_avail:
+        # 디버그: 어떤 키가 있는지 확인
+        _found_keys = []
+        for _k in ["PAT_TOKEN", "GH_PAT", "GITHUB_TOKEN", "GITHUB_PAT"]:
+            try:
+                if st.secrets[_k]:
+                    _found_keys.append(_k)
+            except Exception:
+                pass
+        st.warning(f"GitHub Secret 미인식. 등록된 키: {_found_keys if _found_keys else '없음'}")
     if _gh_avail:
         st.markdown("#### ☁️ GitHub 백업 / 복원")
         _gc1, _gc2 = st.columns(2)
