@@ -904,6 +904,46 @@ def calculate_fifo_lots(df, symbol_key):
 _GH_BACKUP_PATH = "trades_backup.json"  # 리포 내 경로
 _GH_API_BASE    = "https://api.github.com"
 
+def build_backup_json():
+    data = {
+        'manual_trades': st.session_state.get('manual_trades', []),
+        'exclude_symbols_text': st.session_state.get('exclude_symbols_text', '') or '',
+        'opt_same_day_buy_first': bool(st.session_state.get('opt_same_day_buy_first', True)),
+        'user_ticker_map': st.session_state.get('_user_ticker_map', {}),
+    }
+    if 'master_df' in st.session_state:
+        df = st.session_state.master_df.copy()
+        df['거래일자'] = df['거래일자'].astype(str)
+        data['master_df'] = df.to_dict(orient='records')
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+def build_backup_excel():
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+        if 'master_df' in st.session_state:
+            df = st.session_state.master_df.copy()
+            df['거래일자'] = df['거래일자'].astype(str)
+            df.to_excel(writer, sheet_name='거래내역', index=False)
+        if st.session_state.get('manual_trades'):
+            pd.DataFrame(st.session_state.manual_trades).to_excel(
+                writer, sheet_name='수동입력', index=False)
+        if 'positions_df' in st.session_state:
+            st.session_state.positions_df.to_excel(
+                writer, sheet_name='잔고현황', index=False)
+        settings_df = pd.DataFrame({
+            '항목': ['exclude_symbols_text', 'opt_same_day_buy_first'],
+            '값': [
+                st.session_state.get('exclude_symbols_text', '') or '',
+                'TRUE' if st.session_state.get('opt_same_day_buy_first', True) else 'FALSE',
+            ],
+        })
+        settings_df.to_excel(writer, sheet_name='설정', index=False)
+        utm = st.session_state.get('_user_ticker_map', {})
+        pd.DataFrame({'종목명': list(utm.keys()), '티커': list(utm.values())}).to_excel(
+            writer, sheet_name='티커매핑', index=False)
+    buf.seek(0)
+    return buf.read()
+
 def _gh_headers() -> dict | None:
     """PAT_TOKEN → GitHub API 헤더. 없으면 None."""
     try:
