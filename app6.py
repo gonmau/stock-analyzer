@@ -336,6 +336,25 @@ if 'manual_trades' not in st.session_state:
     st.session_state.manual_trades = []
 
 
+_ALERTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "price_alerts.json")
+
+def load_price_alerts() -> dict:
+    try:
+        if os.path.exists(_ALERTS_PATH):
+            with open(_ALERTS_PATH, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def save_price_alerts(data: dict):
+    try:
+        with open(_ALERTS_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def _load_default_exclude() -> str:
     """영구 기본 제외종목 로드: Secrets → exclude_default.txt → 빈 문자열 순서."""
     try:
@@ -1330,45 +1349,9 @@ with tab1:
     elif 'live_prices_time' in st.session_state:
         _col_msg.caption(f"마지막 조회: {st.session_state['live_prices_time']} (재조회하려면 버튼을 누르세요)")
 
-    # ── 목표가 / 손절가 설정 ──────────────────────────────
+    # ── price_alerts 로드 ──────────────────────────────
     if 'price_alerts' not in st.session_state:
-        st.session_state['price_alerts'] = {}
-
-    _alert_stocks = disp_pos[disp_pos['잔고수량'] > 0]['종목명'].dropna().tolist()
-    if _alert_stocks:
-        with st.expander("🎯 목표가 / 손절가 설정", expanded=False):
-            st.caption("설정한 가격에 도달하면 보유 테이블 행 색상으로 표시됩니다.")
-            _pa = st.session_state['price_alerts']
-            _acols = st.columns(4)
-            _acols[0].markdown("**종목**")
-            _acols[1].markdown("**목표가 (원)**")
-            _acols[2].markdown("**손절가 (원)**")
-            _acols[3].markdown("**초기화**")
-            for _sn in _alert_stocks:
-                _sk2 = disp_pos[disp_pos['종목명'] == _sn]['종목키'].iloc[0]
-                _avg2 = float(disp_pos[disp_pos['종목명'] == _sn]['평균단가'].iloc[0])
-                _cur_alert = _pa.get(_sk2, {})
-                _ac0, _ac1, _ac2, _ac3 = st.columns(4)
-                _ac0.markdown(f"**{_sn}**")
-                _new_target = _ac1.number_input(
-                    "목표가", min_value=0, step=100,
-                    value=int(_cur_alert.get('target', 0)),
-                    key=f"alert_t_{_sk2}", label_visibility="collapsed"
-                )
-                _new_stop = _ac2.number_input(
-                    "손절가", min_value=0, step=100,
-                    value=int(_cur_alert.get('stoplos', 0)),
-                    key=f"alert_s_{_sk2}", label_visibility="collapsed"
-                )
-                if _ac3.button("🗑", key=f"alert_del_{_sk2}"):
-                    _pa.pop(_sk2, None)
-                    st.rerun()
-                # 값 즉시 반영
-                if _new_target > 0 or _new_stop > 0:
-                    _pa[_sk2] = {'target': _new_target, 'stoplos': _new_stop}
-                elif _sk2 in _pa:
-                    _pa.pop(_sk2)
-            st.session_state['price_alerts'] = _pa
+        st.session_state['price_alerts'] = load_price_alerts()
 
     # ── 테이블 구성 ──
     _live = st.session_state.get('live_prices', {})
@@ -1423,14 +1406,36 @@ with tab1:
             _m2.metric("총 평가금액",  f"₩{_hp['평가금액'].sum():,.0f}")
             _m3.metric("총 보유원가",  f"₩{_cost:,.0f}")
 
+        # ── 목표가 / 손절가 컬럼 주입 ──
+        _pa_now = st.session_state.get('price_alerts', {})
+        def _get_alert_val(row, key):
+            _sk = disp_pos[disp_pos['종목명'] == row['종목명']]['종목키'].values
+            if len(_sk) == 0: return None
+            v = _pa_now.get(_sk[0], {}).get(key, 0)
+            return int(v) if v and v > 0 else None
+
+        disp_pos['목표가']    = disp_pos.apply(lambda r: _get_alert_val(r, 'target'),  axis=1)
+        disp_pos['손절가']    = disp_pos.apply(lambda r: _get_alert_val(r, 'stoplos'), axis=1)
+        disp_pos['목표까지(%)'] = disp_pos.apply(
+            lambda r: round((r['목표가'] - r['현재가']) / r['현재가'] * 100, 2)
+                      if pd.notna(r.get('현재가')) and r['현재가'] > 0
+                         and r['목표가'] is not None and pd.notna(r['목표가']) else None, axis=1)
+        disp_pos['손절까지(%)'] = disp_pos.apply(
+            lambda r: round((r['손절가'] - r['현재가']) / r['현재가'] * 100, 2)
+                      if pd.notna(r.get('현재가')) and r['현재가'] > 0
+                         and r['손절가'] is not None and pd.notna(r['손절가']) else None, axis=1)
+
         base_cols = ['종목명', '잔고수량', '평균단가', '현재가', '수익률(%)',
+                     '목표가', '목표까지(%)', '손절가', '손절까지(%)',
                      '회복필요상승률(%)', '미실현손익', '평가금액', '보유원가', '실현손익',
                      '최초매수일', '보유일수', '매수횟수']
         base_cols = [c for c in base_cols if c in disp_pos.columns]
         fmt = {
             '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '현재가': '{:,.0f}',
+            '목표가': '{:,.0f}', '손절가': '{:,.0f}',
             '보유원가': '{:,.0f}', '실현손익': '{:,.0f}',
             '미실현손익': '{:,.0f}', '평가금액': '{:,.0f}', '수익률(%)': '{:+.2f}',
+            '목표까지(%)': '{:+.2f}', '손절까지(%)': '{:+.2f}',
             '회복필요상승률(%)': '{:+.2f}',
             '보유일수': '{:,.0f}', '매수횟수': '{:,.0f}',
         }
@@ -1462,13 +1467,77 @@ with tab1:
             bg  = '#1a3a5c' if (unr is None or pd.isna(unr) or float(unr) >= 0) else '#3a1a1a'
             return [f'background-color:{bg};color:white'] * len(row)
 
+        _pnl_cols = [c for c in ['미실현손익', '수익률(%)', '회복필요상승률(%)', '목표까지(%)', '손절까지(%)'] if c in base_cols]
         st.dataframe(
             disp_pos[base_cols].sort_values('잔고수량', ascending=False)
             .style.apply(highlight_holding, axis=1)
-            .map(_color_pnl_cell, subset=['미실현손익', '수익률(%)', '회복필요상승률(%)'])
+            .map(_color_pnl_cell, subset=_pnl_cols)
             .format(fmt, na_rep='-'),
             use_container_width=True, height=450
         )
+
+        # ── 목표가 / 손절가 인라인 편집 ──────────────────────
+        _holding_names = disp_pos[disp_pos['잔고수량'] > 0]['종목명'].dropna().tolist()
+        if _holding_names:
+            with st.expander("🎯 목표가 / 손절가 설정", expanded=False):
+                st.caption("가격 또는 수익률(%)로 입력. 둘 중 하나만 입력하면 나머지 자동 계산. 0이면 미설정.")
+                _pa = st.session_state['price_alerts']
+                _changed = False
+
+                _hdr = st.columns([3, 2, 2, 2, 2, 1])
+                _hdr[0].markdown("**종목**")
+                _hdr[1].markdown("**목표가 (원)**")
+                _hdr[2].markdown("**목표 수익률 (%)**")
+                _hdr[3].markdown("**손절가 (원)**")
+                _hdr[4].markdown("**손절 수익률 (%)**")
+                _hdr[5].markdown("**초기화**")
+
+                for _sn in _holding_names:
+                    _sk2  = disp_pos[disp_pos['종목명'] == _sn]['종목키'].iloc[0]
+                    _avg2 = float(disp_pos[disp_pos['종목명'] == _sn]['평균단가'].iloc[0])
+                    _cur2 = _live.get(_sk2, _avg2)
+                    _ca   = _pa.get(_sk2, {})
+
+                    # 저장된 값 → 원/% 역산
+                    _t_price = int(_ca.get('target',  0))
+                    _s_price = int(_ca.get('stoplos', 0))
+                    _t_pct   = round((_t_price - _avg2) / _avg2 * 100, 2) if _t_price > 0 and _avg2 > 0 else 0.0
+                    _s_pct   = round((_s_price - _avg2) / _avg2 * 100, 2) if _s_price > 0 and _avg2 > 0 else 0.0
+
+                    _r0, _r1, _r2, _r3, _r4, _r5 = st.columns([3, 2, 2, 2, 2, 1])
+                    _r0.markdown(f"**{_sn}**  \n`평균단가 ₩{_avg2:,.0f}`")
+
+                    _nt_price = _r1.number_input("목표가(원)", min_value=0, step=100,
+                                                  value=_t_price, key=f"at_p_{_sk2}", label_visibility="collapsed")
+                    _nt_pct   = _r2.number_input("목표(%)", min_value=-100.0, max_value=10000.0, step=0.5,
+                                                  value=_t_pct, format="%.2f", key=f"at_r_{_sk2}", label_visibility="collapsed")
+                    _ns_price = _r3.number_input("손절가(원)", min_value=0, step=100,
+                                                  value=_s_price, key=f"as_p_{_sk2}", label_visibility="collapsed")
+                    _ns_pct   = _r4.number_input("손절(%)", min_value=-100.0, max_value=10000.0, step=0.5,
+                                                  value=_s_pct, format="%.2f", key=f"as_r_{_sk2}", label_visibility="collapsed")
+
+                    # 원 입력 우선, 0이면 % 로 계산
+                    final_target  = _nt_price if _nt_price > 0 else (int(_avg2 * (1 + _nt_pct / 100)) if _nt_pct != 0 else 0)
+                    final_stoplos = _ns_price if _ns_price > 0 else (int(_avg2 * (1 + _ns_pct / 100)) if _ns_pct != 0 else 0)
+
+                    if _r5.button("🗑", key=f"adel_{_sk2}"):
+                        _pa.pop(_sk2, None)
+                        _changed = True
+                    elif final_target > 0 or final_stoplos > 0:
+                        _new_val = {'target': final_target, 'stoplos': final_stoplos}
+                        if _pa.get(_sk2) != _new_val:
+                            _pa[_sk2] = _new_val
+                            _changed = True
+                    elif _sk2 in _pa:
+                        _pa.pop(_sk2)
+                        _changed = True
+
+                if _changed:
+                    st.session_state['price_alerts'] = _pa
+                    save_price_alerts(_pa)
+                    st.rerun()
+
+
 
     else:
         base_cols = ['종목명', '잔고수량', '평균단가', '보유원가', '실현손익', '누적매수수량', '누적매도수량']
