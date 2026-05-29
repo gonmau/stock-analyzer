@@ -14,18 +14,30 @@ st.set_page_config(page_title="주식 종목별 손익 분석기", layout="wide"
 # yfinance 현재가 조회
 # ==========================================
 
+_KRX_TICKERS_URL = (
+    "https://raw.githubusercontent.com/gonmau/stock-analyzer/main/krx_tickers.json"
+)
+
 @st.cache_data(ttl=86400, show_spinner=False)  # 하루 캐시
 def load_ticker_map() -> dict:
     """
-    krx_tickers.csv → 종목명: yfinance 티커 딕셔너리 로드.
-    KOSPI → .KS / KOSDAQ → .KQ / US → 그대로
-    파일 없으면 빈 dict 반환.
+    1순위: GitHub raw JSON (KRX 전종목 ~2500개, 매일 자동 갱신)
+    2순위: 로컬 krx_tickers.csv (폴백)
     """
-    import os
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "krx_tickers.csv")
-    if not os.path.exists(path):
-        return {}
+    import urllib.request
+
+    # 1순위: GitHub JSON
     try:
+        with urllib.request.urlopen(_KRX_TICKERS_URL, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        pass
+
+    # 2순위: 로컬 CSV
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "krx_tickers.csv")
+        if not os.path.exists(path):
+            return {}
         df = pd.read_csv(path, encoding='utf-8-sig', dtype=str).fillna('')
         mapping = {}
         for _, row in df.iterrows():
@@ -1418,15 +1430,6 @@ with tab1:
 
                 _code6_pairs = list(_key_to_code6.items())
 
-                # 디버그
-                with st.expander("🔧 디버그", expanded=True):
-                    st.write("_YF_NORM_MAP 크기:", len(_YF_NORM_MAP))
-                    st.write("_key_to_code6:", _key_to_code6)
-                    st.write("_code6_pairs:", _code6_pairs)
-                    if _code6_pairs:
-                        _test_code = _code6_pairs[0][1]
-                        _test_price = _fetch_naver_price(_test_code)
-                        st.write(f"네이버 테스트 ({_test_code}):", _test_price)
 
                 key_to_price = {}
                 if _code6_pairs:
