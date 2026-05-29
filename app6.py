@@ -1359,6 +1359,9 @@ with tab1:
     if _col_btn.button("📡 현재가 조회 (실시간)", type="primary", use_container_width=True):
         with st.spinner("현재가를 가져오는 중..."):
             try:
+                from zoneinfo import ZoneInfo
+                _KST = ZoneInfo('Asia/Seoul')
+
                 _holding = disp_pos[disp_pos['잔고수량'] > 0].copy()
                 if '종목코드6' in combined_df.columns:
                     _code_src = combined_df.drop_duplicates('종목키')[['종목키', '종목코드6']]
@@ -1370,6 +1373,12 @@ with tab1:
                     _c6 = str(_hr.get('종목코드6', '') or '').strip()
                     if _c6 and len(_c6) == 6 and _c6.isdigit():
                         _code6_pairs.append((_hr['종목키'], _c6))
+
+                # 디버그: 종목코드6 상태 확인
+                with st.expander("🔧 종목코드6 디버그 (확인 후 삭제)", expanded=True):
+                    st.write("_holding 컬럼:", list(_holding.columns))
+                    st.write("종목코드6 샘플:", _holding[['종목키','종목코드6']].to_dict('records') if '종목코드6' in _holding.columns else "컬럼 없음")
+                    st.write("_code6_pairs:", _code6_pairs)
 
                 key_to_price = {}
                 if _code6_pairs:
@@ -1392,12 +1401,13 @@ with tab1:
                     _col_msg.warning("⚠️ 조회 가능한 종목이 없습니다. 거래내역에 종목코드6 컬럼이 있는지 확인하세요.")
                 else:
                     st.session_state['live_prices']      = key_to_price
-                    st.session_state['live_prices_time'] = datetime.now().strftime("%H:%M:%S")
+                    _now_kst = datetime.now(_KST).strftime("%H:%M:%S")
+                    st.session_state['live_prices_time'] = _now_kst
                     _naver_hit = len([k for k, _ in _code6_pairs if k in key_to_price])
                     _yf_hit    = len(key_to_price) - _naver_hit
                     _hit_total = len(key_to_price)
                     _miss      = len(_holding) - _hit_total
-                    msg = f"✅ {_hit_total}/{len(_holding)}개 완료 — {st.session_state['live_prices_time']} 기준"
+                    msg = f"✅ {_hit_total}/{len(_holding)}개 완료 — {_now_kst} KST 기준"
                     msg += f"  (네이버 {_naver_hit}개"
                     if _yf_hit: msg += f" + yfinance폴백 {_yf_hit}개"
                     msg += ")"
