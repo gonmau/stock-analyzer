@@ -1035,8 +1035,14 @@ def github_restore() -> tuple[bool, str]:
             "Accept": "application/vnd.github+json",
         })
         with urllib.request.urlopen(req, timeout=10) as r:
-            meta = json.loads(r.read())
-        content = base64.b64decode(meta["content"].replace("\n", "")).decode("utf-8")
+            raw = r.read()
+            meta = json.loads(raw)
+        # 디버그: 응답 키 및 content 앞부분 확인
+        st.write("API 응답 키:", list(meta.keys()))
+        st.write("content 앞 100자:", str(meta.get("content", ""))[:100])
+        st.write("encoding:", meta.get("encoding"))
+        content_b64 = meta.get("content", "").replace("\n", "").strip()
+        content = base64.b64decode(content_b64).decode("utf-8")
         return restore_from_json(io.StringIO(content))
     except Exception as e:
         return False, f"GitHub 복원 실패: {e}"
