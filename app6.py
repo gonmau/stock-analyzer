@@ -900,7 +900,96 @@ def calculate_fifo_lots(df, symbol_key):
 # ==========================================
 # 5. 백업 / 복원 헬퍼
 # ==========================================
-def build_backup_json():
+
+_GH_BACKUP_PATH = "trades_backup.json"  # 리포 내 경로
+_GH_API_BASE    = "https://api.github.com"
+
+def _gh_headers() -> dict | None:
+    """PAT_TOKEN → GitHub API 헤더. 없으면 None."""
+    try:
+        token = st.secrets.get("PAT_TOKEN", "")
+        repo  = st.secrets.get("GITHUB_REPO", "gonmau/stock-analyzer")
+        if token:
+            return {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "_repo": repo,
+            }
+    except Exception:
+        pass
+    return None
+
+def github_backup() -> tuple[bool, str]:
+    """현재 백업 JSON을 GitHub 리포에 push."""
+    import urllib.request, base64
+    hdrs = _gh_headers()
+    if not hdrs:
+        return False, "PAT_TOKEN 또는 GITHUB_REPO Secret이 설정되지 않았습니다."
+    repo  = hdrs.pop("_repo")
+    token = hdrs["Authorization"].split(" ")[1]
+
+    content = build_backup_json().encode("utf-8")
+    b64     = base64.b64encode(content).decode()
+
+    api_url = f"{_GH_API_BASE}/repos/{repo}/contents/{_GH_BACKUP_PATH}"
+
+    # 기존 파일 SHA 조회 (업데이트 시 필요)
+    sha = None
+    try:
+        req = urllib.request.Request(api_url, headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        })
+        with urllib.request.urlopen(req, timeout=10) as r:
+            sha = json.loads(r.read()).get("sha")
+    except Exception:
+        pass
+
+    payload = {
+        "message": f"backup: trades_backup.json ({datetime.now().strftime('%Y-%m-%d %H:%M KST')})",
+        "content": b64,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        req  = urllib.request.Request(api_url, data=body, method="PUT", headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=15) as r:
+            r.read()
+        return True, f"✅ GitHub 백업 완료 ({repo}/{_GH_BACKUP_PATH})"
+    except Exception as e:
+        return False, f"GitHub 백업 실패: {e}"
+
+
+def github_restore() -> tuple[bool, str]:
+    """GitHub 리포에서 백업 JSON을 가져와 복원."""
+    import urllib.request, base64
+    hdrs = _gh_headers()
+    if not hdrs:
+        return False, "PAT_TOKEN 또는 GITHUB_REPO Secret이 설정되지 않았습니다."
+    repo  = hdrs.pop("_repo")
+    token = hdrs["Authorization"].split(" ")[1]
+
+    api_url = f"{_GH_API_BASE}/repos/{repo}/contents/{_GH_BACKUP_PATH}"
+    try:
+        req = urllib.request.Request(api_url, headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        })
+        with urllib.request.urlopen(req, timeout=10) as r:
+            meta = json.loads(r.read())
+        content = base64.b64decode(meta["content"]).decode("utf-8")
+        return restore_from_json(io.StringIO(content))
+    except Exception as e:
+        return False, f"GitHub 복원 실패: {e}"
+
+
     data = {
         'manual_trades': st.session_state.get('manual_trades', []),
         'exclude_symbols_text': st.session_state.get('exclude_symbols_text', '') or '',
@@ -956,7 +1045,12 @@ def _apply_settings_to_shadow(exclude_val: str | None, buy_first_val: bool | Non
 
 def restore_from_json(uploaded):
     try:
-        data = json.load(uploaded)
+        if isinstance(uploaded, str):
+            data = json.loads(uploaded)
+        elif isinstance(uploaded, io.StringIO):
+            data = json.loads(uploaded.getvalue())
+        else:
+            data = json.load(uploaded)
         if 'master_df' in data and data['master_df']:
             df = pd.DataFrame(data['master_df'])
             df['거래일자'] = pd.to_datetime(df['거래일자'], errors='coerce')
@@ -1149,6 +1243,26 @@ with st.sidebar:
     st.divider()
     st.header("💾 백업 / 복원")
 
+    # ── GitHub 백업 / 복원 ──
+    _gh_avail = _gh_headers() is not None
+    if _gh_avail:
+        st.markdown("#### ☁️ GitHub 백업 / 복원")
+        _gc1, _gc2 = st.columns(2)
+        if _gc1.button("⬆️ GitHub에 백업", use_container_width=True, type="primary"):
+            _ok, _msg = github_backup()
+            (st.success if _ok else st.error)(_msg)
+        if _gc2.button("⬇️ GitHub에서 복원", use_container_width=True):
+            _ok, _msg = github_restore()
+            (st.success if _ok else st.error)(_msg)
+            if _ok:
+                st.rerun()
+        st.caption(f"저장 위치: `gonmau/stock-analyzer/{_GH_BACKUP_PATH}`")
+        st.divider()
+    else:
+        st.info("💡 `PAT_TOKEN` Secret을 등록하면 GitHub 자동 백업/복원을 사용할 수 있습니다.")
+        st.divider()
+
+    # ── 로컬 백업 / 복원 ──
     if 'master_df' in st.session_state:
         col_j, col_e = st.columns(2)
         col_j.download_button(
