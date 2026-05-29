@@ -1035,14 +1035,24 @@ def github_restore() -> tuple[bool, str]:
             "Accept": "application/vnd.github+json",
         })
         with urllib.request.urlopen(req, timeout=10) as r:
-            raw = r.read()
-            meta = json.loads(raw)
-        # 디버그: 응답 키 및 content 앞부분 확인
-        st.write("API 응답 키:", list(meta.keys()))
-        st.write("content 앞 100자:", str(meta.get("content", ""))[:100])
-        st.write("encoding:", meta.get("encoding"))
-        content_b64 = meta.get("content", "").replace("\n", "").strip()
-        content = base64.b64decode(content_b64).decode("utf-8")
+            meta = json.loads(r.read())
+
+        encoding = meta.get("encoding", "")
+        content_raw = meta.get("content", "").replace("\n", "").strip()
+
+        if encoding == "base64" and content_raw:
+            content = base64.b64decode(content_raw).decode("utf-8")
+        else:
+            # 파일이 크거나 encoding=none → download_url로 직접 받기
+            dl_url = meta.get("download_url")
+            if not dl_url:
+                return False, "download_url을 찾을 수 없습니다."
+            req2 = urllib.request.Request(dl_url, headers={
+                "Authorization": f"Bearer {token}",
+            })
+            with urllib.request.urlopen(req2, timeout=15) as r2:
+                content = r2.read().decode("utf-8")
+
         return restore_from_json(io.StringIO(content))
     except Exception as e:
         return False, f"GitHub 복원 실패: {e}"
