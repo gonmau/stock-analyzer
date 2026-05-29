@@ -48,6 +48,29 @@ def load_ticker_map() -> dict:
 
 _YF_NAME_MAP = load_ticker_map()
 
+# 정규화 종목명 → 티커 역방향 맵 (normalize_stock_name 키로 빠르게 찾기 위함)
+# 예: "삼성에스디에스" → "018260.KS", "LG이노텍" → "011070.KS"
+_YF_NORM_MAP: dict[str, str] = {}
+# 코드6 → 티커 맵 (네이버 조회용 역추출)
+_YF_CODE6_MAP: dict[str, str] = {}
+
+def _build_norm_maps():
+    import re as _re
+    for _name, _ticker in _YF_NAME_MAP.items():
+        _m = _re.search(r'(\d{6})\.(KS|KQ)$', _ticker)
+        if _m:
+            _YF_CODE6_MAP[_m.group(1)] = _ticker
+        # normalize 적용한 키로도 저장
+        try:
+            _nk = normalize_stock_name(_name)
+            _YF_NORM_MAP[_nk] = _ticker
+        except Exception:
+            pass
+        # 원본 키도 저장
+        _YF_NORM_MAP[_name] = _ticker
+
+_build_norm_maps()
+
 
 # KOSPI/KOSDAQ 판별: 간단히 코드 앞자리로 구분 (완전하진 않지만 실용적)
 _KOSDAQ_PREFIXES = ('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')
@@ -1378,13 +1401,13 @@ with tab1:
                         if _c6 and len(_c6) == 6 and _c6.isdigit():
                             _key_to_code6[_hr['종목키']] = _c6
 
-                # YF_NAME_MAP에서 역추출 (005930.KS → 005930)
+                # YF_NORM_MAP에서 역추출 (정규화 종목명 → 티커 → 코드6)
                 if not _key_to_code6:
                     for _, _hr in _holding.iterrows():
                         _sk = _hr['종목키']
-                        _nm = _hr.get('종목명', _sk)
-                        for _lookup in [_sk, _nm]:
-                            _yf_t = _YF_NAME_MAP.get(str(_lookup), '')
+                        _nm = str(_hr.get('종목명', _sk))
+                        for _lookup in [_sk, _nm, normalize_stock_name(_nm)]:
+                            _yf_t = _YF_NORM_MAP.get(_lookup, '')
                             if _yf_t:
                                 _m = re.search(r'(\d{6})\.(KS|KQ)$', _yf_t)
                                 if _m:
