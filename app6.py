@@ -1418,6 +1418,16 @@ with tab1:
 
                 _code6_pairs = list(_key_to_code6.items())
 
+                # 디버그
+                with st.expander("🔧 디버그", expanded=True):
+                    st.write("_YF_NORM_MAP 크기:", len(_YF_NORM_MAP))
+                    st.write("_key_to_code6:", _key_to_code6)
+                    st.write("_code6_pairs:", _code6_pairs)
+                    if _code6_pairs:
+                        _test_code = _code6_pairs[0][1]
+                        _test_price = _fetch_naver_price(_test_code)
+                        st.write(f"네이버 테스트 ({_test_code}):", _test_price)
+
                 key_to_price = {}
                 if _code6_pairs:
                     fetch_current_prices_naver.clear()
