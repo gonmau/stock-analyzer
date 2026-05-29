@@ -1036,7 +1036,7 @@ def github_restore() -> tuple[bool, str]:
         })
         with urllib.request.urlopen(req, timeout=10) as r:
             meta = json.loads(r.read())
-        content = base64.b64decode(meta["content"]).decode("utf-8")
+        content = base64.b64decode(meta["content"].replace("\n", "")).decode("utf-8")
         return restore_from_json(io.StringIO(content))
     except Exception as e:
         return False, f"GitHub 복원 실패: {e}"
