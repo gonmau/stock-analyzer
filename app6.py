@@ -2315,7 +2315,6 @@ with tab5:
     st.caption("매도 체결일 기준으로 실현된 손익을 일/주/월/연 단위로 집계합니다.")
 
     # 매도 거래 + 실현손익 계산
-    @st.cache_data
     def build_pnl_timeseries(_df):
         """전체 거래에서 종목별로 매도 실현손익을 날짜 단위로 집계."""
         if _df.empty:
