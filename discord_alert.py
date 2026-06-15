@@ -117,7 +117,10 @@ def send_discord(messages: list[str]):
         body = json.dumps({"content": chunk}).encode("utf-8")
         req = urllib.request.Request(
             DISCORD_WEBHOOK_URL, data=body, method="POST",
-            headers={"Content-Type": "application/json"},
+            headers={
+              "Content-Type": "application/json",
+              "User-Agent": "Mozilla/5.0",
+            },
         )
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
