@@ -428,6 +428,13 @@ def save_price_alerts(data: dict):
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+    # GitHub Actions(디스코드 알림 스크립트)가 동일 설정을 읽도록 동기화
+    try:
+        content = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        github_push_file("price_alerts.json", content,
+                          f"chore: update price_alerts.json ({datetime.now().strftime('%Y-%m-%d %H:%M KST')})")
+    except Exception:
+        pass
 
 
 def _load_default_exclude() -> str:
@@ -943,6 +950,47 @@ def build_backup_excel():
             writer, sheet_name='티커매핑', index=False)
     buf.seek(0)
     return buf.read()
+
+def github_push_file(path_in_repo: str, content_bytes: bytes, commit_msg: str) -> tuple[bool, str]:
+    """임의 파일을 GitHub 리포에 push (있으면 업데이트, 없으면 생성)."""
+    import urllib.request, base64
+    hdrs = _gh_headers()
+    if not hdrs:
+        return False, "PAT_TOKEN 또는 GITHUB_REPO Secret이 설정되지 않았습니다."
+    repo  = hdrs.pop("_repo")
+    token = hdrs["Authorization"].split(" ")[1]
+
+    b64 = base64.b64encode(content_bytes).decode()
+    api_url = f"{_GH_API_BASE}/repos/{repo}/contents/{path_in_repo}"
+
+    sha = None
+    try:
+        req = urllib.request.Request(api_url, headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        })
+        with urllib.request.urlopen(req, timeout=10) as r:
+            sha = json.loads(r.read()).get("sha")
+    except Exception:
+        pass
+
+    payload = {"message": commit_msg, "content": b64}
+    if sha:
+        payload["sha"] = sha
+
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        req  = urllib.request.Request(api_url, data=body, method="PUT", headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=15) as r:
+            r.read()
+        return True, f"✅ {path_in_repo} 동기화 완료"
+    except Exception as e:
+        return False, f"{path_in_repo} 동기화 실패: {e}"
+
 
 def _gh_headers() -> dict | None:
     """PAT_TOKEN → GitHub API 헤더. 없으면 None."""
@@ -1656,6 +1704,30 @@ with tab1:
                     msg += ")"
                     if _miss: msg += f"  · 미조회 {_miss}개"
                     _col_msg.success(msg)
+
+                    # 디스코드 알림 스크립트용 보유종목 스냅샷 동기화
+                    try:
+                        _snap_rows = []
+                        for _, _hr in _holding.iterrows():
+                            _sk = _hr['종목키']
+                            _snap_rows.append({
+                                '종목키':   _sk,
+                                '종목명':   _hr.get('종목명', _sk),
+                                '평균단가': float(_hr.get('평균단가', 0) or 0),
+                                '잔고수량': float(_hr.get('잔고수량', 0) or 0),
+                                '종목코드6': _key_to_code6.get(_sk, ''),
+                            })
+                        _snap = {
+                            'updated_at': datetime.now(_KST).strftime('%Y-%m-%d %H:%M:%S'),
+                            'positions': _snap_rows,
+                        }
+                        github_push_file(
+                            "positions_snapshot.json",
+                            json.dumps(_snap, ensure_ascii=False, indent=2).encode("utf-8"),
+                            f"chore: update positions_snapshot.json ({_now_kst} KST)"
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
                 _col_msg.error(f"❌ 조회 실패: {e}")
                 st.exception(e)
@@ -1729,6 +1801,8 @@ with tab1:
 
         disp_pos['목표가']    = disp_pos.apply(lambda r: _get_alert_val(r, 'target'),  axis=1)
         disp_pos['손절가']    = disp_pos.apply(lambda r: _get_alert_val(r, 'stoplos'), axis=1)
+        disp_pos['트레일링(%)'] = disp_pos.apply(
+            lambda r: (_pa_now.get(r['종목키'], {}).get('trailing_pct') or None), axis=1)
         disp_pos['목표까지(%)'] = disp_pos.apply(
             lambda r: round((r['목표가'] - r['현재가']) / r['현재가'] * 100, 2)
                       if pd.notna(r.get('현재가')) and r['현재가'] > 0
@@ -1739,7 +1813,7 @@ with tab1:
                          and r['손절가'] is not None and pd.notna(r['손절가']) else None, axis=1)
 
         base_cols = ['종목명', '잔고수량', '평균단가', '현재가', '수익률(%)',
-                     '목표가', '목표까지(%)', '손절가', '손절까지(%)',
+                     '목표가', '목표까지(%)', '손절가', '손절까지(%)', '트레일링(%)',
                      '회복필요상승률(%)', '미실현손익', '평가금액', '보유원가', '실현손익',
                      '최초매수일', '보유일수', '매수횟수']
         base_cols = [c for c in base_cols if c in disp_pos.columns]
@@ -1749,6 +1823,7 @@ with tab1:
             '보유원가': '{:,.0f}', '실현손익': '{:,.0f}',
             '미실현손익': '{:,.0f}', '평가금액': '{:,.0f}', '수익률(%)': '{:+.2f}',
             '목표까지(%)': '{:+.2f}', '손절까지(%)': '{:+.2f}',
+            '트레일링(%)': '{:.1f}',
             '회복필요상승률(%)': '{:+.2f}',
             '보유일수': '{:,.0f}', '매수횟수': '{:,.0f}',
         }
@@ -1792,18 +1867,20 @@ with tab1:
         # ── 목표가 / 손절가 인라인 편집 ──────────────────────
         _holding_names = disp_pos[disp_pos['잔고수량'] > 0]['종목명'].dropna().tolist()
         if _holding_names:
-            with st.expander("🎯 목표가 / 손절가 설정", expanded=False):
+            with st.expander("🎯 목표가 / 손절가 / 트레일링 스탑 설정", expanded=False):
                 st.caption("가격 또는 수익률(%)로 입력. 둘 중 하나만 입력하면 나머지 자동 계산. 0이면 미설정.")
+                st.caption("📉 트레일링(%): 수익 중이면 '신고가 대비 -X%' 하락 시, 손실 중이면 '평단 대비 -X%'(=손절가와 동일) 도달 시 알림.")
                 _pa = st.session_state['price_alerts']
                 _changed = False
 
-                _hdr = st.columns([3, 2, 2, 2, 2, 1])
+                _hdr = st.columns([3, 2, 2, 2, 2, 1.5, 1])
                 _hdr[0].markdown("**종목**")
                 _hdr[1].markdown("**목표가 (원)**")
                 _hdr[2].markdown("**목표 수익률 (%)**")
                 _hdr[3].markdown("**손절가 (원)**")
                 _hdr[4].markdown("**손절 수익률 (%)**")
-                _hdr[5].markdown("**초기화**")
+                _hdr[5].markdown("**트레일링(%)**")
+                _hdr[6].markdown("**초기화**")
 
                 for _sn in _holding_names:
                     _sk2  = disp_pos[disp_pos['종목명'] == _sn]['종목키'].iloc[0]
@@ -1814,10 +1891,11 @@ with tab1:
                     # 저장된 값 → 원/% 역산
                     _t_price = int(_ca.get('target',  0))
                     _s_price = int(_ca.get('stoplos', 0))
+                    _trail_pct = float(_ca.get('trailing_pct', 0) or 0)
                     _t_pct   = round((_t_price - _avg2) / _avg2 * 100, 2) if _t_price > 0 and _avg2 > 0 else 0.0
                     _s_pct   = round((_s_price - _avg2) / _avg2 * 100, 2) if _s_price > 0 and _avg2 > 0 else 0.0
 
-                    _r0, _r1, _r2, _r3, _r4, _r5 = st.columns([3, 2, 2, 2, 2, 1])
+                    _r0, _r1, _r2, _r3, _r4, _r5, _r6 = st.columns([3, 2, 2, 2, 2, 1.5, 1])
                     _r0.markdown(f"**{_sn}**  \n`평균단가 ₩{_avg2:,.0f}`")
 
                     _nt_price = _r1.number_input("목표가(원)", min_value=0, step=100,
@@ -1828,16 +1906,19 @@ with tab1:
                                                   value=_s_price, key=f"as_p_{_sk2}", label_visibility="collapsed")
                     _ns_pct   = _r4.number_input("손절(%)", min_value=-100.0, max_value=10000.0, step=0.5,
                                                   value=_s_pct, format="%.2f", key=f"as_r_{_sk2}", label_visibility="collapsed")
+                    _nt_trail = _r5.number_input("트레일링(%)", min_value=0.0, max_value=100.0, step=0.5,
+                                                  value=_trail_pct, format="%.1f", key=f"at_tr_{_sk2}", label_visibility="collapsed")
 
                     # 원 입력 우선, 0이면 % 로 계산
                     final_target  = _nt_price if _nt_price > 0 else (int(_avg2 * (1 + _nt_pct / 100)) if _nt_pct != 0 else 0)
                     final_stoplos = _ns_price if _ns_price > 0 else (int(_avg2 * (1 + _ns_pct / 100)) if _ns_pct != 0 else 0)
+                    final_trail   = _nt_trail if _nt_trail > 0 else 0
 
-                    if _r5.button("🗑", key=f"adel_{_sk2}"):
+                    if _r6.button("🗑", key=f"adel_{_sk2}"):
                         _pa.pop(_sk2, None)
                         _changed = True
-                    elif final_target > 0 or final_stoplos > 0:
-                        _new_val = {'target': final_target, 'stoplos': final_stoplos}
+                    elif final_target > 0 or final_stoplos > 0 or final_trail > 0:
+                        _new_val = {'target': final_target, 'stoplos': final_stoplos, 'trailing_pct': final_trail}
                         if _pa.get(_sk2) != _new_val:
                             _pa[_sk2] = _new_val
                             _changed = True
