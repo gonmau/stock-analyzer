@@ -30,8 +30,12 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add alert_state.json
-          git diff --cached --quiet && echo "변경 없음" || (
-            git commit -m "chore: update alert_state.json ($(date '+%Y-%m-%d %H:%M KST'))"
-            git push
-          )
+          if [ -f alert_state.json ]; then
+            git add alert_state.json
+            git diff --cached --quiet && echo "변경 없음" || (
+              git commit -m "chore: update alert_state.json ($(date '+%Y-%m-%d %H:%M KST'))"
+              git push
+            )
+          else
+            echo "alert_state.json 없음 - 커밋 생략"
+          fi
