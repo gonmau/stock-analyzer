@@ -3,7 +3,8 @@ name: Price Alert (Discord)
 on:
   schedule:
     # KST 09:00~15:30 사이 30분 간격 (UTC 00:00~06:30, 평일 = UTC 일~목 = KST 월~금)
-    - cron: '0,30 0-6 * * 1-5'
+    # - cron: '*/5 0-5 * * 1-5'
+    - cron: '0,5,10,15,20,25,30 6 * * 1-5'
   workflow_dispatch:
 
 jobs:
