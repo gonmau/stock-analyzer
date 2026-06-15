@@ -246,6 +246,9 @@ def main():
 
     if state_changed:
         save_json(STATE_PATH, state)
+    elif not os.path.exists(STATE_PATH):
+        # 최초 실행 등으로 파일이 아직 없으면 빈 상태라도 생성
+        save_json(STATE_PATH, state)
 
 
 if __name__ == "__main__":
