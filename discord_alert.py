@@ -56,13 +56,27 @@ def fetch_naver_price(code6: str):
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
-            # 디버그: 응답 전체 출력 (1회 확인 후 제거 예정)
-            if code6 == "263750":  # 펄어비스 1종목만 출력
-                print(f"\n[DEBUG] 네이버 API 응답 ({code6}):")
-                print(json.dumps(data, ensure_ascii=False, indent=2))
-            price = data.get("closePrice") or data.get("currentPrice") or data.get("stockPrice")
-            if price:
-                return int(str(price).replace(",", ""))
+
+            market_status = data.get("marketStatus", "")  # PREOPEN / OPEN / CLOSE 등
+
+            # NXT 시간외(프리/애프터마켓) 시세 우선 사용
+            over = data.get("overMarketPriceInfo", {})
+            over_status = over.get("overMarketStatus", "")
+            over_price_str = over.get("overPrice", "")
+
+            if over_status == "OPEN" and over_price_str:
+                price = int(str(over_price_str).replace(",", ""))
+                session = over.get("tradingSessionType", "")
+                print(f"  [{code6}] NXT {session} 시세: {price:,}원 (정규장 상태: {market_status})")
+                return price
+
+            # NXT 미운영 시간 → KRX 현재가/종가
+            price_str = data.get("closePrice") or data.get("currentPrice") or data.get("stockPrice")
+            if price_str:
+                price = int(str(price_str).replace(",", ""))
+                print(f"  [{code6}] KRX 시세: {price:,}원 (장 상태: {market_status})")
+                return price
+
     except Exception as e:
         print(f"⚠️ {code6} 네이버 가격 조회 실패: {e}")
     return None
