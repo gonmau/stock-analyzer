@@ -122,7 +122,7 @@ def send_discord(messages: list[str]):
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 r.read()
-       except urllib.error.HTTPError as e:
+        except urllib.error.HTTPError as e:
           body = e.read().decode("utf-8", errors="ignore")
 
           print(f"❌ Discord 전송 실패")
