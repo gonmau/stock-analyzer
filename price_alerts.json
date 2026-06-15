@@ -2,12 +2,12 @@
   "펄어비스": {
     "target": 51990,
     "stoplos": 37811,
-    "trailing_pct": 0.1
+    "trailing_pct": 1.0
   },
   "현대자동차": {
     "target": 804194,
     "stoplos": 629370,
-    "trailing_pct": 7.0
+    "trailing_pct": 1.0
   },
   "삼성전자": {
     "target": 405949,
