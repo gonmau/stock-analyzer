@@ -56,6 +56,10 @@ def fetch_naver_price(code6: str):
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
+            # 디버그: 응답 전체 출력 (1회 확인 후 제거 예정)
+            if code6 == "263750":  # 펄어비스 1종목만 출력
+                print(f"\n[DEBUG] 네이버 API 응답 ({code6}):")
+                print(json.dumps(data, ensure_ascii=False, indent=2))
             price = data.get("closePrice") or data.get("currentPrice") or data.get("stockPrice")
             if price:
                 return int(str(price).replace(",", ""))
