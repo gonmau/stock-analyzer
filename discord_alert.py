@@ -97,14 +97,16 @@ def fetch_price(code6: str):
     return fetch_yf_price(code6)
 
 
-def send_discord(messages: list[str]):
+def send_discord(messages: list[str]) -> bool:
     if not DISCORD_WEBHOOK_URL:
         print("⚠️ DISCORD_WEBHOOK_URL 미설정 - 알림 전송 생략")
         for m in messages:
             print("  [알림 미발송]", m)
-        return
+        return False
     if not messages:
-        return
+        return True
+
+    print(f"📤 Discord 전송 시도: {len(messages)}건, webhook 길이={len(DISCORD_WEBHOOK_URL)}")
 
     content = "\n\n".join(messages)
     # Discord 메시지 길이 제한(2000자) 대비 분할
@@ -113,29 +115,30 @@ def send_discord(messages: list[str]):
         chunks.append(content[:1900])
         content = content[1900:]
 
-    for chunk in chunks:
+    all_ok = True
+    for i, chunk in enumerate(chunks):
         body = json.dumps({"content": chunk}).encode("utf-8")
         req = urllib.request.Request(
             DISCORD_WEBHOOK_URL, data=body, method="POST",
             headers={
-              "Content-Type": "application/json",
-              "User-Agent": "Mozilla/5.0",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0",
             },
         )
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 r.read()
+                print(f"✅ chunk {i+1}/{len(chunks)} 전송 성공 (status={r.status})")
         except urllib.error.HTTPError as e:
-          body = e.read().decode("utf-8", errors="ignore")
-
-          print(f"❌ Discord 전송 실패")
-          print(f"HTTP Status: {e.code}")
-          print("Response:")
-          print(body)
-
-          success = False
+            err_body = e.read().decode("utf-8", errors="ignore")
+            print(f"❌ Discord 전송 실패 (chunk {i+1}/{len(chunks)})")
+            print(f"HTTP Status: {e.code}")
+            print(f"Response: {err_body}")
+            all_ok = False
         except Exception as e:
-            print(f"❌ Discord 전송 실패: {e}")
+            print(f"❌ Discord 전송 실패 (chunk {i+1}/{len(chunks)}): {type(e).__name__}: {e}")
+            all_ok = False
+    return all_ok
 
 
 def fmt_won(v):
@@ -226,6 +229,8 @@ def main():
             if pnl_pct >= 0:
                 # 수익 중: 신고가 대비 -trail_pct% 하락 시 발동
                 trail_trigger_price = high * (1 - trail_pct / 100)
+                print(f"  [수익구간] 트리거가={trail_trigger_price:,.0f} / 현재가={cur:,.0f} / "
+                      f"조건충족={cur <= trail_trigger_price and high > avg}")
                 if cur <= trail_trigger_price and high > avg:
                     new_fired.add("trailing")
                     if "trailing" not in fired:
@@ -235,9 +240,14 @@ def main():
                             f"매수 후 신고가 {fmt_won(high)} → 현재가 {fmt_won(cur)} ({drawdown:+.2f}%)\n"
                             f"기준: 신고가 대비 -{trail_pct:.1f}% · 평균단가 {fmt_won(avg)} · 수익률 {pnl_pct:+.2f}%"
                         )
+                        print(f"  -> 신규 메시지 추가됨 (수익구간)")
+                    else:
+                        print(f"  -> 이미 fired 상태, 메시지 생성 안 함")
             else:
                 # 손실 중: 평균단가 대비 -trail_pct% 도달 시 발동 (손절가와 동일 기준)
                 trail_trigger_price = avg * (1 - trail_pct / 100)
+                print(f"  [손실구간] 트리거가={trail_trigger_price:,.0f} / 현재가={cur:,.0f} / "
+                      f"조건충족={cur <= trail_trigger_price}")
                 if cur <= trail_trigger_price:
                     new_fired.add("trailing")
                     if "trailing" not in fired:
@@ -246,10 +256,15 @@ def main():
                             f"평균단가 {fmt_won(avg)} 대비 -{trail_pct:.1f}% 도달 → 현재가 {fmt_won(cur)}\n"
                             f"수익률 {pnl_pct:+.2f}%"
                         )
+                        print(f"  -> 신규 메시지 추가됨 (손실구간)")
+                    else:
+                        print(f"  -> 이미 fired 상태, 메시지 생성 안 함")
 
         if new_fired != fired:
-            st_entry["fired"] = sorted(new_fired)
-            state_changed = True
+            # 전송 성공 후에만 fired를 갱신하기 위해 일단 보류
+            st_entry["_pending_fired"] = sorted(new_fired)
+        else:
+            st_entry.pop("_pending_fired", None)
 
         st_entry["last_price"] = cur
         st_entry["last_checked"] = now_str
@@ -257,10 +272,24 @@ def main():
 
     if messages:
         header = f"📊 주식 알림 ({now_str} KST)\n" + "─" * 20
-        send_discord([header] + messages)
-        print(f"✅ {len(messages)}건 알림 전송 완료")
+        ok = send_discord([header] + messages)
+        if ok:
+            print(f"✅ {len(messages)}건 알림 전송 완료")
+            # 전송 성공한 종목만 fired 상태 확정
+            for sk2, st_entry2 in state.items():
+                if "_pending_fired" in st_entry2:
+                    st_entry2["fired"] = st_entry2.pop("_pending_fired")
+                    state_changed = True
+        else:
+            print(f"❌ 전송 실패 - fired 상태 갱신 보류 (다음 실행에서 재시도)")
+            for sk2, st_entry2 in state.items():
+                st_entry2.pop("_pending_fired", None)
     else:
         print("ℹ️ 발동된 알림 없음")
+        for sk2, st_entry2 in state.items():
+            if "_pending_fired" in st_entry2:
+                st_entry2["fired"] = st_entry2.pop("_pending_fired")
+                state_changed = True
 
     if state_changed:
         save_json(STATE_PATH, state)
