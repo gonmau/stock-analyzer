@@ -1,23 +1,29 @@
 {
   "펄어비스": {
-    "last_price": 40200,
-    "last_checked": "2026-06-15 15:01:33",
-    "fired": []
+    "last_price": 40150,
+    "last_checked": "2026-06-15 15:05:00",
+    "fired": [
+      "trailing"
+    ]
   },
   "현대자동차": {
-    "last_price": 645000,
-    "last_checked": "2026-06-15 15:01:33",
-    "fired": []
+    "last_price": 644000,
+    "last_checked": "2026-06-15 15:05:00",
+    "fired": [
+      "trailing"
+    ]
   },
   "삼성전자": {
     "last_price": 335500,
-    "last_checked": "2026-06-15 15:01:33",
-    "fired": []
+    "last_checked": "2026-06-15 15:05:00",
+    "fired": [
+      "trailing"
+    ]
   },
   "LG이노텍": {
     "high_since_buy": 1205000,
     "last_price": 1205000,
-    "last_checked": "2026-06-15 15:01:33",
+    "last_checked": "2026-06-15 15:05:00",
     "fired": []
   }
 }
