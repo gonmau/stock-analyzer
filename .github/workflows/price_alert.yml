@@ -20,6 +20,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          
+      - name: Test Discord Webhook
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          curl -i \
+            -H "Content-Type: application/json" \
+            -d '{"content":"GitHub Actions Discord 테스트"}' \
+            "$DISCORD_WEBHOOK_URL"
 
       - name: Run price alert check
         env:
