@@ -212,6 +212,13 @@ def main():
 
         # 3) 트레일링 스탑
         if trail_pct > 0:
+          print(f"\n===== {name} =====")
+          print(f"현재가: {cur:,.0f}")
+          print(f"평단가: {avg:,.0f}")
+          print(f"수익률: {pnl_pct:+.2f}%")
+          print(f"트레일링 설정: {trail_pct}%")
+          print(f"신고가: {high:,.0f}")
+          print(f"기존 fired: {fired}")
             if pnl_pct >= 0:
                 # 수익 중: 신고가 대비 -trail_pct% 하락 시 발동
                 trail_trigger_price = high * (1 - trail_pct / 100)
