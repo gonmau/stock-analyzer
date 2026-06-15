@@ -3,5 +3,10 @@
     "target": 51990,
     "stoplos": 37811,
     "trailing_pct": 0
+  },
+  "현대자동차": {
+    "target": 804194,
+    "stoplos": 0,
+    "trailing_pct": 0
   }
 }
