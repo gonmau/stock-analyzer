@@ -1,0 +1,37 @@
+name: Price Alert (Discord)
+
+on:
+  schedule:
+    # KST 09:00~15:30 사이 30분 간격 (UTC 00:00~06:30, 평일 = UTC 일~목 = KST 월~금)
+    - cron: '0,30 0-6 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  price-alert:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run price alert check
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python discord_alert.py
+
+      - name: Commit and push alert_state.json if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add alert_state.json
+          git diff --cached --quiet && echo "변경 없음" || (
+            git commit -m "chore: update alert_state.json ($(date '+%Y-%m-%d %H:%M KST'))"
+            git push
+          )
