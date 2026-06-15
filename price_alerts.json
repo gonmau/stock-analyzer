@@ -8,5 +8,10 @@
     "target": 804194,
     "stoplos": 629370,
     "trailing_pct": 0
+  },
+  "삼성전자": {
+    "target": 405949,
+    "stoplos": 0,
+    "trailing_pct": 0
   }
 }
