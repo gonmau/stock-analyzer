@@ -97,7 +97,7 @@ def _is_us_ticker(ticker: str) -> bool:
 
 
 def _fetch_naver_price(code6: str) -> int | None:
-    """네이버 금융에서 종목코드 6자리 → 현재가. 실패 시 None."""
+    """네이버 금융에서 종목코드 6자리 → 현재가(NXT 시간외 우선, 없으면 KRX). 실패 시 None."""
     import urllib.request, json as _json
     url = f"https://m.stock.naver.com/api/stock/{code6}/basic"
     req = urllib.request.Request(url, headers={
@@ -108,6 +108,13 @@ def _fetch_naver_price(code6: str) -> int | None:
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             data = _json.loads(r.read())
+            # NXT 프리/애프터마켓 운영 중이면 NXT 시세 우선
+            over = data.get("overMarketPriceInfo", {})
+            if over.get("overMarketStatus") == "OPEN":
+                over_price = over.get("overPrice", "")
+                if over_price:
+                    return int(str(over_price).replace(",", ""))
+            # KRX 정규장 또는 NXT 미운영 시간
             price = data.get("closePrice") or data.get("currentPrice") or data.get("stockPrice")
             if price:
                 return int(str(price).replace(",", ""))
@@ -116,12 +123,12 @@ def _fetch_naver_price(code6: str) -> int | None:
     return None
 
 
-@st.cache_data(ttl=60, show_spinner=False)   # 1분 캐시 (네이버는 거의 실시간)
+@st.cache_data(ttl=60, show_spinner=False)   # 1분 캐시 (실시간, NXT 포함)
 def fetch_current_prices_naver(code6_map: tuple) -> dict:
     """
     code6_map: (('종목키', '005930'), ('종목키2', '263750'), ...)
     반환: {'종목키': 71400, ...}
-    네이버 금융 기준 (약 10초 지연). 실패 종목은 제외.
+    네이버 금융 실시간 시세 (NXT 프리/애프터마켓 포함). 실패 종목은 제외.
     """
     result = {}
     for key, code6 in code6_map:
