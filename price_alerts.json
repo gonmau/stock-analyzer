@@ -16,7 +16,7 @@
   },
   "LG이노텍": {
     "target": 1300000,
-    "stoplos": 1071000,
+    "stoplos": 1050000,
     "trailing_pct": 10.0
   }
 }
