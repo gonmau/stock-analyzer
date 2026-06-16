@@ -1875,63 +1875,79 @@ with tab1:
         _holding_names = disp_pos[disp_pos['잔고수량'] > 0]['종목명'].dropna().tolist()
         if _holding_names:
             with st.expander("🎯 목표가 / 손절가 / 트레일링 스탑 설정", expanded=False):
-                st.caption("가격 또는 수익률(%)로 입력. 둘 중 하나만 입력하면 나머지 자동 계산. 0이면 미설정.")
+                st.caption("가격(원) 또는 수익률(%)로 입력. 원 입력 시 % 자동 계산, % 입력 시 원 자동 계산. 0이면 미설정.")
                 st.caption("📉 트레일링(%): 수익 중이면 '신고가 대비 -X%' 하락 시, 손실 중이면 '평단 대비 -X%'(=손절가와 동일) 도달 시 알림.")
+                st.caption("💾 값 변경 시 GitHub에 자동 저장됩니다.")
                 _pa = st.session_state['price_alerts']
                 _changed = False
 
-                _hdr = st.columns([3, 2, 2, 2, 2, 1.5, 1])
-                _hdr[0].markdown("**종목**")
-                _hdr[1].markdown("**목표가 (원)**")
-                _hdr[2].markdown("**목표 수익률 (%)**")
-                _hdr[3].markdown("**손절가 (원)**")
-                _hdr[4].markdown("**손절 수익률 (%)**")
-                _hdr[5].markdown("**트레일링(%)**")
-                _hdr[6].markdown("**초기화**")
-
                 for _sn in _holding_names:
-                    _sk2  = disp_pos[disp_pos['종목명'] == _sn]['종목키'].iloc[0]
-                    _avg2 = float(disp_pos[disp_pos['종목명'] == _sn]['평균단가'].iloc[0])
-                    _cur2 = _live.get(_sk2, _avg2)
-                    _ca   = _pa.get(_sk2, {})
+                    _sk2      = disp_pos[disp_pos['종목명'] == _sn]['종목키'].iloc[0]
+                    _avg2     = float(disp_pos[disp_pos['종목명'] == _sn]['평균단가'].iloc[0])
+                    _ca       = _pa.get(_sk2, {})
 
-                    # 저장된 값 → 원/% 역산
-                    _t_price = int(_ca.get('target',  0))
-                    _s_price = int(_ca.get('stoplos', 0))
+                    # 저장된 값 로드
+                    _t_price   = int(_ca.get('target',  0) or 0)
+                    _s_price   = int(_ca.get('stoplos', 0) or 0)
                     _trail_pct = float(_ca.get('trailing_pct', 0) or 0)
-                    _t_pct   = round((_t_price - _avg2) / _avg2 * 100, 2) if _t_price > 0 and _avg2 > 0 else 0.0
-                    _s_pct   = round((_s_price - _avg2) / _avg2 * 100, 2) if _s_price > 0 and _avg2 > 0 else 0.0
 
-                    _r0, _r1, _r2, _r3, _r4, _r5, _r6 = st.columns([3, 2, 2, 2, 2, 1.5, 1])
-                    _r0.markdown(f"**{_sn}**  \n`평균단가 ₩{_avg2:,.0f}`")
+                    # 저장된 원 → % 역산 (표시용)
+                    _t_pct_disp = round((_t_price - _avg2) / _avg2 * 100, 2) if _t_price > 0 and _avg2 > 0 else 0.0
+                    _s_pct_disp = round((_s_price - _avg2) / _avg2 * 100, 2) if _s_price > 0 and _avg2 > 0 else 0.0
 
-                    _nt_price = _r1.number_input("목표가(원)", min_value=0, step=100,
-                                                  value=_t_price, key=f"at_p_{_sk2}", label_visibility="collapsed")
-                    _nt_pct   = _r2.number_input("목표(%)", min_value=-100.0, max_value=10000.0, step=0.5,
-                                                  value=_t_pct, format="%.2f", key=f"at_r_{_sk2}", label_visibility="collapsed")
-                    _ns_price = _r3.number_input("손절가(원)", min_value=0, step=100,
-                                                  value=_s_price, key=f"as_p_{_sk2}", label_visibility="collapsed")
-                    _ns_pct   = _r4.number_input("손절(%)", min_value=-100.0, max_value=10000.0, step=0.5,
-                                                  value=_s_pct, format="%.2f", key=f"as_r_{_sk2}", label_visibility="collapsed")
-                    _nt_trail = _r5.number_input("트레일링(%)", min_value=0.0, max_value=100.0, step=0.5,
-                                                  value=_trail_pct, format="%.1f", key=f"at_tr_{_sk2}", label_visibility="collapsed")
+                    st.markdown(f"**{_sn}** `평균단가 ₩{_avg2:,.0f}`")
+                    _c1, _c2, _c3, _c4, _c5, _c6 = st.columns([2, 1.5, 2, 1.5, 1.5, 0.8])
 
-                    # 원 입력 우선, 0이면 % 로 계산
-                    final_target  = _nt_price if _nt_price > 0 else (int(_avg2 * (1 + _nt_pct / 100)) if _nt_pct != 0 else 0)
-                    final_stoplos = _ns_price if _ns_price > 0 else (int(_avg2 * (1 + _ns_pct / 100)) if _ns_pct != 0 else 0)
-                    final_trail   = _nt_trail if _nt_trail > 0 else 0
+                    # 목표가(원) 입력
+                    _nt_price = _c1.number_input(
+                        "목표가 (원)", min_value=0, step=100, value=_t_price,
+                        key=f"at_p_{_sk2}", label_visibility="visible")
+                    # 목표 %(원 입력이 있으면 원 기준, 없으면 % 입력)
+                    if _nt_price > 0:
+                        _nt_pct_calc = round((_nt_price - _avg2) / _avg2 * 100, 2)
+                        _c2.markdown(f"**목표 수익률**")
+                        _c2.markdown(f"<span style='color:#ff6b6b;font-size:1.1em;font-weight:bold'>{_nt_pct_calc:+.2f}%</span>", unsafe_allow_html=True)
+                        final_target = _nt_price
+                    else:
+                        _nt_pct = _c2.number_input(
+                            "목표 수익률 (%)", min_value=0.0, max_value=10000.0, step=0.5,
+                            value=max(0.0, _t_pct_disp), format="%.2f",
+                            key=f"at_r_{_sk2}", label_visibility="visible")
+                        final_target = int(_avg2 * (1 + _nt_pct / 100)) if _nt_pct > 0 else 0
 
-                    if _r6.button("🗑", key=f"adel_{_sk2}"):
+                    # 손절가(원) 입력
+                    _ns_price = _c3.number_input(
+                        "손절가 (원)", min_value=0, step=100, value=_s_price,
+                        key=f"as_p_{_sk2}", label_visibility="visible")
+                    # 손절 %(원 입력이 있으면 원 기준, 없으면 % 입력)
+                    if _ns_price > 0:
+                        _ns_pct_calc = round((_ns_price - _avg2) / _avg2 * 100, 2)
+                        _c4.markdown(f"**손절 수익률**")
+                        _c4.markdown(f"<span style='color:#74b9ff;font-size:1.1em;font-weight:bold'>{_ns_pct_calc:+.2f}%</span>", unsafe_allow_html=True)
+                        final_stoplos = _ns_price
+                    else:
+                        _ns_pct = _c4.number_input(
+                            "손절 수익률 (%)", min_value=-100.0, max_value=0.0, step=0.5,
+                            value=min(0.0, _s_pct_disp), format="%.2f",
+                            key=f"as_r_{_sk2}", label_visibility="visible")
+                        final_stoplos = int(_avg2 * (1 + _ns_pct / 100)) if _ns_pct < 0 else 0
+
+                    _nt_trail = _c5.number_input(
+                        "트레일링 (%)", min_value=0.0, max_value=100.0, step=0.5,
+                        value=_trail_pct, format="%.1f",
+                        key=f"at_tr_{_sk2}", label_visibility="visible")
+                    final_trail = _nt_trail if _nt_trail > 0 else 0
+
+                    if _c6.button("🗑", key=f"adel_{_sk2}"):
                         _pa.pop(_sk2, None)
                         _changed = True
-                    elif final_target > 0 or final_stoplos > 0 or final_trail > 0:
+                    else:
                         _new_val = {'target': final_target, 'stoplos': final_stoplos, 'trailing_pct': final_trail}
                         if _pa.get(_sk2) != _new_val:
                             _pa[_sk2] = _new_val
                             _changed = True
-                    elif _sk2 in _pa:
-                        _pa.pop(_sk2)
-                        _changed = True
+
+                    st.divider()
 
                 if _changed:
                     st.session_state['price_alerts'] = _pa
