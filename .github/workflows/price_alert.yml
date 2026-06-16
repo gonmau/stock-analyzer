@@ -2,13 +2,14 @@ name: Price Alert (Discord)
 
 on:
   schedule:
-    # KST 08:00~20:00 사이 5분 간격 (UTC 23:00~11:00, 평일)
-    # UTC 23:00~23:55 (KST 전날 → 당일 08:00~08:55) : 일~목 (KST 월~금)
+    # KST 08:00~20:00 사이 10분 간격 (UTC 23:00~11:00, 평일)
     - cron: '*/10 23 * * 0-4'
-    # UTC 00:00~10:55 (KST 09:00~19:55) : 월~금 (KST 화~토이지만 금요일까지만)
     - cron: '*/10 0-10 * * 1-5'
-    # UTC 11:00 (KST 20:00) 마지막 실행
     - cron: '0 11 * * 1-5'
+  push:
+    paths:
+      - 'price_alerts.json'
+      - 'positions_snapshot.json'
   workflow_dispatch:
 
 jobs:
