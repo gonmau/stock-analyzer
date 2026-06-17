@@ -6,7 +6,7 @@
       "trailing_pct": 10.0
     },
     "last_price": 40200,
-    "last_checked": "2026-06-17 19:27:29",
+    "last_checked": "2026-06-17 19:27:42",
     "fired": [
       "trailing"
     ]
@@ -18,7 +18,7 @@
       "trailing_pct": 10.0
     },
     "last_price": 617000,
-    "last_checked": "2026-06-17 19:27:29",
+    "last_checked": "2026-06-17 19:27:42",
     "fired": [
       "stoplos",
       "trailing"
@@ -27,11 +27,11 @@
   "삼성전자": {
     "_alert_cfg": {
       "target": 400000.0,
-      "stoplos": 320000.0,
+      "stoplos": 340000.0,
       "trailing_pct": 10.0
     },
     "last_price": 343000,
-    "last_checked": "2026-06-17 19:27:29",
+    "last_checked": "2026-06-17 19:27:42",
     "fired": []
   },
   "LG이노텍": {
@@ -42,7 +42,7 @@
     },
     "high_since_buy": 1281000,
     "last_price": 1235000,
-    "last_checked": "2026-06-17 19:27:29",
+    "last_checked": "2026-06-17 19:27:42",
     "fired": []
   }
 }
