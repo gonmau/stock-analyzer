@@ -1,6 +1,6 @@
 {
   "펄어비스": {
-    "target": 55000,
+    "target": 50000,
     "stoplos": 38500,
     "trailing_pct": 10.0
   },
