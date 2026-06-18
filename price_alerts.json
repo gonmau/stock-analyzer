@@ -18,5 +18,30 @@
     "target": 1350000,
     "stoplos": 1050000,
     "trailing_pct": 10.0
+  },
+  "아가방앤컴퍼니": {
+    "target": 0,
+    "stoplos": 0,
+    "trailing_pct": 0
+  },
+  "한국주철관공업": {
+    "target": 0,
+    "stoplos": 0,
+    "trailing_pct": 0
+  },
+  "에스넷시스템": {
+    "target": 0,
+    "stoplos": 0,
+    "trailing_pct": 0
+  },
+  "중국원양자원유한공사": {
+    "target": 0,
+    "stoplos": 0,
+    "trailing_pct": 0
+  },
+  "퀀텀컴퓨팅": {
+    "target": 0,
+    "stoplos": 0,
+    "trailing_pct": 0
   }
 }
