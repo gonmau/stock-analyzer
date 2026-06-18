@@ -11,7 +11,7 @@
   },
   "삼성전자": {
     "target": 390000,
-    "stoplos": 301000,
+    "stoplos": 330000,
     "trailing_pct": 10.0
   },
   "LG이노텍": {
