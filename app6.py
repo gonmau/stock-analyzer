@@ -474,8 +474,123 @@ if '_user_ticker_map' not in st.session_state:
 
 
 # ==========================================
-# 1. 데이터 전처리
+# preprocess_data() 교체 코드
+# 기존 함수 전체를 아래로 대체
 # ==========================================
+
+# 자세히 포맷 감지/파싱용 상수
+_MIRAE_DETAIL_DISCARD_TYPES = frozenset({
+    '주식매수출금', '주식매도입금',
+    '해외주식매수출금', '해외주식매도입금',
+})
+_MIRAE_DETAIL_DISCARD_NAMES = frozenset({'미국달러', 'nan', '', '-'})
+
+
+def _is_mirae_detail_format(df_raw: "pd.DataFrame") -> bool:
+    """
+    미래에셋 '자세히 보기' 포맷 여부 감지.
+    - 4행(index=3) 에 '자세히 보기' 텍스트 포함
+    - 5행(index=4) 헤더: 거래일자/거래종류/거래수량/거래금액
+    - 6행(index=5) 서브헤더: 종목명/단가/제세금합
+    """
+    try:
+        row3 = "".join(df_raw.iloc[3].fillna('').astype(str))
+        if '자세히' not in row3:
+            return False
+        row4 = "".join(df_raw.iloc[4].fillna('').astype(str))
+        row5 = "".join(df_raw.iloc[5].fillna('').astype(str))
+        return '거래일자' in row4 and '거래종류' in row4 and '단가' in row5
+    except Exception:
+        return False
+
+
+def _parse_mirae_detail(df_raw: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    미래에셋 자세히 포맷 2행-쌍 파서.
+
+    홀수행(row1): 거래일자[0], 거래종류[1], 거래수량[2], 거래금액[3], 수수료[5]
+    짝수행(row2): 종목명[0],   (빈칸)[1],   단가[2],     입출금액[3],  제세금합[5]
+
+    버리는 경우:
+      - 거래종류가 출금/입금 정산행 (_MIRAE_DETAIL_DISCARD_TYPES)
+      - 짝수행 종목명이 비어있거나 '미국달러' (외화 정산행)
+    """
+    import pandas as _pd
+
+    # 데이터는 7행(index=6)부터
+    data = df_raw.iloc[6:].reset_index(drop=True)
+
+    rows = []
+    i = 0
+    while i < len(data):
+        row1 = data.iloc[i]
+
+        날짜_str  = str(row1.iloc[0]).strip()
+        거래종류  = str(row1.iloc[1]).strip()
+
+        # 거래일자/거래종류 없는 행(정산 짝수행 잔재 등) 스킵
+        if 날짜_str == 'nan' or 거래종류 == 'nan':
+            i += 1
+            continue
+
+        # 출금/입금 정산행 → 짝수행까지 통째로 스킵
+        if 거래종류 in _MIRAE_DETAIL_DISCARD_TYPES:
+            i += 2
+            continue
+
+        # 짝수행 읽기
+        if i + 1 >= len(data):
+            i += 1
+            continue
+        row2 = data.iloc[i + 1]
+
+        종목명 = str(row2.iloc[0]).strip()
+        if 종목명 in _MIRAE_DETAIL_DISCARD_NAMES:
+            i += 2
+            continue
+
+        # 단가 파싱 (외화 소수점 허용)
+        단가_raw = str(row2.iloc[2]).strip()
+        try:
+            단가 = float(단가_raw.replace(',', '')) if 단가_raw not in ('-', 'nan', '') else 0.0
+        except Exception:
+            단가 = 0.0
+
+        거래수량_raw = row1.iloc[2]
+        거래금액_raw = row1.iloc[3]
+        수수료_raw   = row1.iloc[5]
+        제세금_raw   = row2.iloc[5]
+
+        def _to_float(v):
+            try:
+                return float(str(v).replace(',', '').strip() or 0)
+            except Exception:
+                return 0.0
+
+        거래수량 = _to_float(거래수량_raw)
+        거래금액 = _to_float(거래금액_raw)
+        수수료   = _to_float(수수료_raw)
+        제세금   = _to_float(제세금_raw)
+
+        # 단가 역산: 원화 거래이고 단가가 0인 경우만 (해외주식 거래금액=0은 역산 안 함)
+        if 단가 == 0 and 거래수량 > 0 and 거래금액 > 0:
+            단가 = round(거래금액 / 거래수량, 4)
+
+        rows.append({
+            '거래일자':  날짜_str,
+            '매매구분':  거래종류,
+            '종목명':    종목명,
+            '거래수량':  거래수량,
+            '거래단가':  단가,
+            '거래금액':  거래금액,
+            '수수료':    수수료,
+            '제세금':    제세금,
+        })
+        i += 2
+
+    return _pd.DataFrame(rows) if rows else _pd.DataFrame()
+
+
 def preprocess_data(file, file_name, file_order=0):
     try:
         if file_name.endswith('.csv'):
@@ -485,6 +600,38 @@ def preprocess_data(file, file_name, file_order=0):
                 df = pd.read_csv(file, encoding='cp949')
         else:
             df_raw = pd.read_excel(file, header=None)
+
+            # ── 미래에셋 자세히 포맷 분기 ──────────────────────────────
+            if _is_mirae_detail_format(df_raw):
+                df = _parse_mirae_detail(df_raw)
+                if df.empty:
+                    st.warning(f"'{file_name}' 자세히 포맷 파싱 결과가 비어있습니다.")
+                    return pd.DataFrame()
+                # 이미 올바른 컬럼명으로 반환되므로 아래 col_map/rename 생략
+                # 거래일자 변환만 수행
+                df['거래일자'] = pd.to_datetime(
+                    df['거래일자'].astype(str).str.replace('.', '-', regex=False), errors='coerce'
+                )
+                df = df.dropna(subset=['거래일자', '종목명']).reset_index(drop=True)
+                # classify_type으로 매매유형 분류 (아래 공통 로직과 동일)
+                def _classify(x):
+                    x = str(x)
+                    if any(w in x for w in ['출고', '매도', '판매', '환매']): return 'SELL'
+                    if any(w in x for w in ['입고', '매수', '구매', '재투자']): return 'BUY'
+                    return 'ETC'
+                df['매매유형'] = df['매매구분'].apply(_classify)
+                df = df[df['매매유형'] != 'ETC'].reset_index(drop=True)
+                df['종목키'] = df['종목명'].apply(normalize_stock_name)
+                df['_raw_order'] = range(len(df))
+                df['_file_ord']  = int(file_order)
+                buy_first = st.session_state.get('opt_same_day_buy_first', True)
+                df = sort_trades_for_settlement_export(df, same_day_buy_first=buy_first)
+                df['_intra_file_seq'] = range(len(df))
+                df['계좌']   = file_name.split('.')[0]
+                df['수동입력'] = False
+                return df
+            # ── 기존 간단히 포맷 (이하 기존 코드 그대로) ─────────────────
+
             header_idx = 0
             for i, row in df_raw.iterrows():
                 row_str = "".join(row.fillna('').astype(str))
@@ -535,9 +682,6 @@ def preprocess_data(file, file_name, file_order=0):
     mask_no_price = (df['거래단가'] == 0) & (df['거래수량'] > 0) & (df['거래금액'] > 0)
     df.loc[mask_no_price, '거래단가'] = (df['거래금액'] / df['거래수량']).round().astype(int)
 
-    # 집계 키는 반드시 '정규화 종목명'만 사용.
-    # 일부 행만 종목코드가 있으면 6자리 vs 이름으로 종목키가 갈라져
-    # 매수/매도가 다른 버킷에 쌓이고(누적매수==누적매도인데 잔고만 남는 현상) 잔고가 왜곡됨.
     df['종목키'] = df['종목명'].apply(normalize_stock_name)
     for c in ['종목코드', '단축코드', '종목번호', '종목명_코드']:
         if c in df.columns:
@@ -554,7 +698,6 @@ def preprocess_data(file, file_name, file_order=0):
     df['매매유형'] = df['매매구분'].apply(classify_type)
     df = df[df['매매유형'] != 'ETC'].reset_index(drop=True)
 
-    # 시트 원본 행 순서(ETC 제거 후). 체결시각 없음 → 입금일/일자별 원장은 동일일 매도가 위에 올 수 있음.
     df['_raw_order'] = range(len(df))
     df['_file_ord'] = int(file_order)
     buy_first = st.session_state.get('opt_same_day_buy_first', True)
