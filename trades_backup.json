@@ -30,10 +30,7 @@
   ],
   "exclude_symbols_text": "로코조이\n미래드림타겟주식A\n한진해운\n중국원양자원유한공사\n에스넷시스템\n아가방앤컴퍼니\n한국주철관공업",
   "opt_same_day_buy_first": true,
-  "user_ticker_map": {
-    "퀀텀컴퓨팅": "QUBT",
-    "퀀텀 컴퓨팅": "QUBT"
-  },
+  "user_ticker_map": {},
   "master_df": [
     {
       "거래일자": "2010-09-06",
