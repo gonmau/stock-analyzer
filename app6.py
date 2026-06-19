@@ -60,6 +60,15 @@ def load_ticker_map() -> dict:
 
 _YF_NAME_MAP = load_ticker_map()
 
+# 해외주식 등 KRX 자동 매핑(krx_tickers.json)에 없는 종목 수동 보강.
+# 미래에셋 거래내역 '종목명' 컬럼에 찍히는 이름과 동일하게 키를 맞출 것.
+_YF_NAME_MAP_OVERRIDE = {
+    '퀀텀 컴퓨팅': 'QUBT',
+    '퀀텀컴퓨팅':  'QUBT',
+}
+_YF_NAME_MAP.update(_YF_NAME_MAP_OVERRIDE)
+
+
 # 정규화 종목명 → 티커 역방향 맵 (normalize_stock_name 키로 빠르게 찾기 위함)
 # 예: "삼성에스디에스" → "018260.KS", "LG이노텍" → "011070.KS"
 _YF_NORM_MAP: dict[str, str] = {}
@@ -1600,7 +1609,11 @@ st.divider()
 # ════════════════════════════════════════
 @st.dialog("종목 상세", width="large")
 def show_stock_dialog(stock_name: str):
-    sym_key = combined_df[combined_df["종목명"] == stock_name]["종목키"].iloc[0]
+    _match = combined_df[combined_df["종목명"] == stock_name]["종목키"]
+    if _match.empty:
+        st.warning(f"'{stock_name}' 종목의 거래내역을 찾을 수 없습니다. (종목명 표기 불일치 가능성)")
+        return
+    sym_key = _match.iloc[0]
     detail_df = calculate_trade_detail(combined_df, sym_key)
     pos_row = positions_df[positions_df["종목키"] == sym_key]
 
@@ -2115,13 +2128,20 @@ with tab1:
     st.divider()
 
     # ── 종목 클릭 → 인라인 상세 ──────────────────────────
-    _stock_names = sorted(disp_pos['종목명'].dropna().unique().tolist())
+    # 종목명이 계좌별로 표기가 다를 수 있어 disp_pos['종목명']이
+    # combined_df 원본 종목명과 정확히 일치하지 않는 경우가 있음(IndexError 원인).
+    # 종목키 기준으로 매칭해 항상 안전하게 찾도록 함.
+    _name_to_key = dict(zip(disp_pos['종목명'], disp_pos['종목키']))
+    _stock_names = sorted(_name_to_key.keys())
     _sel_inline  = st.selectbox("🔍 종목 선택 → 전체 거래내역 + 로트별 손익",
                                 ["-- 종목 선택 --"] + _stock_names,
                                 key="tab1_inline_stock")
 
     if _sel_inline and _sel_inline != "-- 종목 선택 --":
-        _sym_key   = combined_df[combined_df['종목명'] == _sel_inline]['종목키'].iloc[0]
+        _sym_key   = _name_to_key.get(_sel_inline)
+        if _sym_key is None or _sym_key not in combined_df['종목키'].values:
+            st.warning(f"'{_sel_inline}' 종목의 거래내역을 찾을 수 없습니다. (종목명 표기 불일치 가능성)")
+            st.stop()
         _det_df    = calculate_trade_detail(combined_df, _sym_key)
         _pos_inline = positions_df[positions_df['종목키'] == _sym_key]
         _lp_inline  = st.session_state.get('live_prices', {}).get(_sym_key)
