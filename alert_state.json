@@ -5,8 +5,8 @@
       "stoplos": 38500.0,
       "trailing_pct": 10.0
     },
-    "last_price": 38250,
-    "last_checked": "2026-06-22 13:48:43",
+    "last_price": 38100,
+    "last_checked": "2026-06-22 19:30:24",
     "fired": [
       "stoplos",
       "trailing"
@@ -18,8 +18,8 @@
       "stoplos": 630000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 584000,
-    "last_checked": "2026-06-22 13:48:43",
+    "last_price": 583000,
+    "last_checked": "2026-06-22 19:30:24",
     "fired": [
       "stoplos",
       "trailing"
@@ -31,8 +31,8 @@
       "stoplos": 320000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 350500,
-    "last_checked": "2026-06-22 13:48:43",
+    "last_price": 355500,
+    "last_checked": "2026-06-22 19:30:24",
     "fired": [],
     "high_since_buy": 375500
   },
@@ -43,8 +43,8 @@
       "trailing_pct": 10.0
     },
     "high_since_buy": 1295000,
-    "last_price": 1127000,
-    "last_checked": "2026-06-22 13:48:43",
+    "last_price": 1173000,
+    "last_checked": "2026-06-22 19:30:24",
     "fired": []
   },
   "SK하이닉스": {
@@ -53,9 +53,11 @@
       "stoplos": 2600000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 2883000,
-    "last_checked": "2026-06-22 13:48:43",
-    "fired": [],
-    "high_since_buy": 2883000
+    "last_price": 2949000,
+    "last_checked": "2026-06-22 19:30:24",
+    "fired": [
+      "near_target"
+    ],
+    "high_since_buy": 2949000
   }
 }
