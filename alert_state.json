@@ -1,12 +1,12 @@
 {
   "펄어비스": {
     "_alert_cfg": {
-      "target": 50000.0,
+      "target": 47000.0,
       "stoplos": 38500.0,
       "trailing_pct": 10.0
     },
-    "last_price": 37450,
-    "last_checked": "2026-06-23 10:25:28",
+    "last_price": 36850,
+    "last_checked": "2026-06-23 13:10:06",
     "fired": [
       "stoplos",
       "trailing"
