@@ -1,6 +1,6 @@
 streamlit
 pandas
-plotly
+plotly>=5.0.0
 openpyxl
 setuptools
 pykrx>=1.0.0
