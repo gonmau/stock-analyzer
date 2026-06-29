@@ -5,8 +5,8 @@
       "stoplos": 34000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 36700,
-    "last_checked": "2026-06-29 11:28:05",
+    "last_price": 36600,
+    "last_checked": "2026-06-29 11:53:42",
     "fired": [
       "trailing"
     ],
@@ -31,9 +31,11 @@
       "stoplos": 300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 323000,
-    "last_checked": "2026-06-29 11:28:05",
-    "fired": [],
+    "last_price": 321500,
+    "last_checked": "2026-06-29 11:53:42",
+    "fired": [
+      "trailing"
+    ],
     "high_since_buy": 375500
   },
   "LG이노텍": {
@@ -56,8 +58,8 @@
       "stoplos": 2300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 2580000,
-    "last_checked": "2026-06-29 11:28:05",
+    "last_price": 2572000,
+    "last_checked": "2026-06-29 11:53:42",
     "fired": [],
     "high_since_buy": 2949000
   }
