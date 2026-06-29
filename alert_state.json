@@ -2,13 +2,12 @@
   "펄어비스": {
     "_alert_cfg": {
       "target": 47000.0,
-      "stoplos": 38500.0,
+      "stoplos": 34000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 36700,
-    "last_checked": "2026-06-29 09:52:47",
+    "last_price": 36200,
+    "last_checked": "2026-06-29 09:56:38",
     "fired": [
-      "stoplos",
       "trailing"
     ]
   },
@@ -31,8 +30,8 @@
       "stoplos": 300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 323500,
-    "last_checked": "2026-06-29 09:52:47",
+    "last_price": 325000,
+    "last_checked": "2026-06-29 09:56:38",
     "fired": [],
     "high_since_buy": 375500
   },
@@ -53,11 +52,11 @@
   "SK하이닉스": {
     "_alert_cfg": {
       "target": 3200000.0,
-      "stoplos": 2550000.0,
+      "stoplos": 2300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 2568000,
-    "last_checked": "2026-06-29 09:52:47",
+    "last_price": 2599000,
+    "last_checked": "2026-06-29 09:56:38",
     "fired": [],
     "high_since_buy": 2949000
   }
