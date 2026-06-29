@@ -5,11 +5,12 @@
       "stoplos": 34000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 36200,
-    "last_checked": "2026-06-29 09:56:38",
+    "last_price": 46050,
+    "last_checked": "2026-06-29 10:07:21",
     "fired": [
-      "trailing"
-    ]
+      "near_target"
+    ],
+    "high_since_buy": 46050
   },
   "현대자동차": {
     "_alert_cfg": {
@@ -30,9 +31,11 @@
       "stoplos": 300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 325000,
-    "last_checked": "2026-06-29 09:56:38",
-    "fired": [],
+    "last_price": 321750,
+    "last_checked": "2026-06-29 10:07:21",
+    "fired": [
+      "trailing"
+    ],
     "high_since_buy": 375500
   },
   "LG이노텍": {
@@ -55,9 +58,11 @@
       "stoplos": 2300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 2599000,
-    "last_checked": "2026-06-29 09:56:38",
-    "fired": [],
+    "last_price": 2531000,
+    "last_checked": "2026-06-29 10:07:21",
+    "fired": [
+      "trailing"
+    ],
     "high_since_buy": 2949000
   }
 }
