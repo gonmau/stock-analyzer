@@ -5,8 +5,8 @@
       "stoplos": 34000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 36600,
-    "last_checked": "2026-07-10 08:35:40",
+    "last_price": 37050,
+    "last_checked": "2026-07-10 09:02:55",
     "fired": [
       "trailing"
     ],
@@ -31,8 +31,8 @@
       "stoplos": 300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 289000,
-    "last_checked": "2026-07-10 08:35:40",
+    "last_price": 287000,
+    "last_checked": "2026-07-10 09:02:55",
     "fired": [
       "stoplos",
       "trailing"
@@ -59,9 +59,10 @@
       "stoplos": 2300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 2301000,
-    "last_checked": "2026-07-10 08:35:40",
+    "last_price": 2269000,
+    "last_checked": "2026-07-10 09:02:55",
     "fired": [
+      "stoplos",
       "trailing"
     ],
     "high_since_buy": 2949000
