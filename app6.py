@@ -274,6 +274,13 @@ def resolve_tickers_yf(holding_df: pd.DataFrame) -> dict:
     all_candidates = list({t for tl in candidates.values() for t in tl})
     prices = fetch_current_prices_yf(tuple(all_candidates))
 
+    # yfinance 자체가 완전히 막힌 경우(Yahoo 차단/네트워크 오류 등)
+    # prices가 통째로 비어버려서 모든 종목의 매핑이 실패하는 것을 방지.
+    # 이 경우 가격 검증 없이 1순위 후보(코드6 → .KS)를 그대로 매핑해서
+    # 사용하고, 실제 데이터 조회 실패는 이후 단계(지지/저항선 계산 등)에서
+    # 개별적으로 노출되도록 한다.
+    _yf_down = bool(all_candidates) and not prices
+
     # 3단계: 유효한(가격이 있는) 티커 선택
     # 사용자 정의 티커는 가격 조회 실패해도 강제 적용
     mapping: dict[str, str] = {}
@@ -293,6 +300,9 @@ def resolve_tickers_yf(holding_df: pd.DataFrame) -> dict:
         
         if is_user_defined and ticker_list:
             # 사용자 정의는 무조건 사용
+            mapping[key] = ticker_list[0]
+        elif _yf_down and ticker_list:
+            # yfinance 전체 조회 실패(야후 차단 등) 시: 검증 없이 1순위 후보 사용
             mapping[key] = ticker_list[0]
         else:
             # 일반 티커는 가격이 있는 것만 사용
