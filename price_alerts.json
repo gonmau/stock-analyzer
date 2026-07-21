@@ -45,7 +45,7 @@
     "trailing_pct": 0
   },
   "SK하이닉스": {
-    "target": 3200000,
+    "target": 2900000,
     "stoplos": 2300000,
     "trailing_pct": 10.0
   }
