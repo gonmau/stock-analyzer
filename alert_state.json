@@ -1,12 +1,12 @@
 {
   "펄어비스": {
     "_alert_cfg": {
-      "target": 47000.0,
+      "target": 43000.0,
       "stoplos": 34000.0,
       "trailing_pct": 10.0
     },
     "last_price": 33350,
-    "last_checked": "2026-07-21 12:39:48",
+    "last_checked": "2026-07-21 12:40:23",
     "fired": [
       "stoplos",
       "trailing"
@@ -28,12 +28,12 @@
   },
   "삼성전자": {
     "_alert_cfg": {
-      "target": 410000.0,
+      "target": 360000.0,
       "stoplos": 300000.0,
       "trailing_pct": 10.0
     },
     "last_price": 260500,
-    "last_checked": "2026-07-21 12:39:48",
+    "last_checked": "2026-07-21 12:40:23",
     "fired": [
       "stoplos",
       "trailing"
@@ -61,7 +61,7 @@
       "trailing_pct": 10.0
     },
     "last_price": 1869000,
-    "last_checked": "2026-07-21 12:39:48",
+    "last_checked": "2026-07-21 12:40:23",
     "fired": [
       "stoplos",
       "trailing"
