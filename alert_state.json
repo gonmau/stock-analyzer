@@ -5,11 +5,9 @@
       "stoplos": 34000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 34750,
-    "last_checked": "2026-08-04 09:10:08",
-    "fired": [
-      "trailing"
-    ],
+    "last_price": 38150,
+    "last_checked": "2026-08-11 08:36:09",
+    "fired": [],
     "high_since_buy": 46050
   },
   "현대자동차": {
@@ -31,8 +29,8 @@
       "stoplos": 300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 241000,
-    "last_checked": "2026-08-04 09:10:08",
+    "last_price": 226500,
+    "last_checked": "2026-08-11 08:36:09",
     "fired": [
       "stoplos",
       "trailing"
@@ -59,8 +57,8 @@
       "stoplos": 2300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 1597000,
-    "last_checked": "2026-08-04 09:10:08",
+    "last_price": 1390000,
+    "last_checked": "2026-08-11 08:36:09",
     "fired": [
       "stoplos",
       "trailing"
