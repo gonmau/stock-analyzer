@@ -63,5 +63,10 @@
     "target": 0,
     "stoplos": 0,
     "trailing_pct": 0
+  },
+  "KODEX코스닥150": {
+    "target": 0,
+    "stoplos": 0,
+    "trailing_pct": 0
   }
 }
