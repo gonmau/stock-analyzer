@@ -48,5 +48,10 @@
     "target": 2900000,
     "stoplos": 2300000,
     "trailing_pct": 10.0
+  },
+  "SPDRSP500ETF트러스트": {
+    "target": 0,
+    "stoplos": 0,
+    "trailing_pct": 0
   }
 }
