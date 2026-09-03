@@ -53,5 +53,10 @@
     "target": 0,
     "stoplos": 0,
     "trailing_pct": 0
+  },
+  "1Q미국SP500": {
+    "target": 0,
+    "stoplos": 0,
+    "trailing_pct": 0
   }
 }
