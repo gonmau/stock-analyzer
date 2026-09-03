@@ -2435,6 +2435,18 @@ with tab2:
     st.subheader("✏️ 수동 거래 입력")
     st.caption("💡 T+2 결제 미반영, 당일 체결 등 파일에 아직 없는 거래를 직접 추가합니다.")
 
+    # 계좌 선택은 form 밖에 둔다: form 안에 있으면 '직접입력' 선택 시
+    # 제출 전까지 텍스트 입력창이 나타나지 않아 이름을 칠 기회가 없다.
+    existing_accounts = sorted(combined_df['계좌'].dropna().astype(str).unique().tolist())
+    account_options   = existing_accounts + ['직접입력']
+    sel_acc_opt = st.selectbox("계좌", account_options, key="manual_acc_select")
+    if sel_acc_opt == '직접입력':
+        input_account = st.text_input(
+            "계좌명 직접 입력", value="", placeholder="예) 토스", key="manual_acc_text"
+        )
+    else:
+        input_account = sel_acc_opt
+
     with st.form("manual_trade_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         col4, col5, col6 = st.columns(3)
@@ -2446,19 +2458,13 @@ with tab2:
         input_price = col5.number_input("단가 (원)", min_value=1, value=10000, step=100)
         input_fee   = col6.number_input("수수료 (원)", min_value=0, value=0, step=10)
 
-        existing_accounts = sorted(combined_df['계좌'].dropna().astype(str).unique().tolist())
-        account_options   = existing_accounts + ['직접입력']
-        sel_acc_opt = st.selectbox("계좌", account_options, key="manual_acc_select")
-        if sel_acc_opt == '직접입력':
-            input_account = st.text_input("계좌명 직접 입력", value="수동입력")
-        else:
-            input_account = sel_acc_opt
-
         submitted = st.form_submit_button("➕ 거래 추가", type="primary", use_container_width=True)
 
     if submitted:
         if not input_name.strip():
             st.error("종목명을 입력해주세요.")
+        elif not str(input_account).strip():
+            st.error("계좌명을 입력해주세요.")
         else:
             st.session_state.manual_trades.append({
                 '날짜':    str(input_date),
@@ -2467,7 +2473,7 @@ with tab2:
                 '수량':    int(input_qty),
                 '단가':    int(input_price),
                 '수수료':  int(input_fee),
-                '계좌':    input_account,
+                '계좌':    str(input_account).strip(),
             })
             st.success(f"✅ {input_date} {input_type} {input_name.strip()} "
                        f"{int(input_qty):,}주 @{int(input_price):,}원 추가됨")
@@ -2498,8 +2504,26 @@ with tab2:
                 st.rerun()
 
             if st.session_state.editing_trade_idx == idx:
+                st.caption(f"✏️ {idx+1}번 거래 수정")
+
+                # 계좌 선택도 form 밖: 안에 있으면 '직접입력' 전환 시
+                # 저장 전까지 텍스트 입력창이 안 나타나 이름을 못 바꾼다.
+                existing_accounts_e = sorted(combined_df['계좌'].dropna().astype(str).unique().tolist())
+                account_options_e   = existing_accounts_e + ['직접입력']
+                cur_acc = t['계좌']
+                acc_idx_e = account_options_e.index(cur_acc) if cur_acc in account_options_e else len(account_options_e) - 1
+                sel_acc_e = st.selectbox("계좌", account_options_e, index=acc_idx_e, key=f"eacc_{idx}")
+                if sel_acc_e == '직접입력':
+                    edit_account = st.text_input(
+                        "계좌명 직접 입력",
+                        value=cur_acc if cur_acc not in existing_accounts_e else "",
+                        placeholder="예) 토스",
+                        key=f"eacc_txt_{idx}",
+                    )
+                else:
+                    edit_account = sel_acc_e
+
                 with st.form(f"edit_trade_form_{idx}"):
-                    st.caption(f"✏️ {idx+1}번 거래 수정")
                     e1, e2, e3 = st.columns(3)
                     e4, e5, e6 = st.columns(3)
                     try:
@@ -2515,18 +2539,6 @@ with tab2:
                     edit_price = e5.number_input("단가 (원)", min_value=1, value=int(t['단가']), step=100, key=f"eprice_{idx}")
                     edit_fee   = e6.number_input("수수료 (원)", min_value=0, value=int(t.get('수수료', 0)), step=10, key=f"efee_{idx}")
 
-                    existing_accounts_e = sorted(combined_df['계좌'].dropna().astype(str).unique().tolist())
-                    account_options_e   = existing_accounts_e + ['직접입력']
-                    cur_acc = t['계좌']
-                    acc_idx_e = account_options_e.index(cur_acc) if cur_acc in account_options_e else len(account_options_e) - 1
-                    sel_acc_e = st.selectbox("계좌", account_options_e, index=acc_idx_e, key=f"eacc_{idx}")
-                    if sel_acc_e == '직접입력':
-                        edit_account = st.text_input("계좌명 직접 입력",
-                                                     value=cur_acc if cur_acc not in existing_accounts_e else "수동입력",
-                                                     key=f"eacc_txt_{idx}")
-                    else:
-                        edit_account = sel_acc_e
-
                     save_col, cancel_col = st.columns(2)
                     save_btn   = save_col.form_submit_button("💾 저장", type="primary", use_container_width=True)
                     cancel_btn = cancel_col.form_submit_button("취소", use_container_width=True)
@@ -2534,6 +2546,8 @@ with tab2:
                 if save_btn:
                     if not edit_name.strip():
                         st.error("종목명을 입력해주세요.")
+                    elif not str(edit_account).strip():
+                        st.error("계좌명을 입력해주세요.")
                     else:
                         st.session_state.manual_trades[idx] = {
                             '날짜':    str(edit_date),
@@ -2542,7 +2556,7 @@ with tab2:
                             '수량':    int(edit_qty),
                             '단가':    int(edit_price),
                             '수수료':  int(edit_fee),
-                            '계좌':    edit_account,
+                            '계좌':    str(edit_account).strip(),
                         }
                         st.session_state.editing_trade_idx = None
                         st.success(f"✅ {edit_date} {edit_type} {edit_name.strip()} 수정 완료")
