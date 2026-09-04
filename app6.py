@@ -1241,6 +1241,12 @@ def _gh_headers() -> dict | None:
 def github_backup() -> tuple[bool, str]:
     """현재 백업 JSON을 GitHub 리포에 push."""
     import urllib.request, base64
+
+    # 안전장치: 데이터가 로드되지 않은 상태(예: 앱 처음 진입 후 실수로 백업 버튼 클릭)에서
+    # 빈 내용으로 기존 백업을 덮어써버리는 사고를 막는다.
+    if 'master_df' not in st.session_state or st.session_state['master_df'].empty:
+        return False, "❌ 백업 취소: 현재 세션에 로드된 데이터가 없습니다. 빈 상태로 백업을 덮어쓰지 않도록 막았습니다. 먼저 '⬇️ GitHub에서 복원'을 누르거나 파일을 업로드하세요."
+
     hdrs = _gh_headers()
     if not hdrs:
         return False, "PAT_TOKEN 또는 GITHUB_REPO Secret이 설정되지 않았습니다."
@@ -1252,7 +1258,8 @@ def github_backup() -> tuple[bool, str]:
 
     api_url = f"{_GH_API_BASE}/repos/{repo}/contents/{_GH_BACKUP_PATH}"
 
-    # 기존 파일 SHA 조회 (업데이트 시 필요)
+    # 기존 파일 SHA 조회 (업데이트 시 필요) + 기존 백업 대비 데이터가
+    # 급격히 줄어드는 경우(예: manual_trades가 0건이 되는 경우) 감지.
     sha = None
     try:
         req = urllib.request.Request(api_url, headers={
@@ -1260,7 +1267,18 @@ def github_backup() -> tuple[bool, str]:
             "Accept": "application/vnd.github+json",
         })
         with urllib.request.urlopen(req, timeout=10) as r:
-            sha = json.loads(r.read()).get("sha")
+            _remote = json.loads(r.read())
+            sha = _remote.get("sha")
+            _remote_content = base64.b64decode(_remote.get("content", "")).decode("utf-8", errors="ignore")
+            _remote_data = json.loads(_remote_content) if _remote_content else {}
+            _remote_trades = len(_remote_data.get("manual_trades", []) or [])
+            _local_trades  = len(st.session_state.get("manual_trades", []) or [])
+            if _remote_trades > 0 and _local_trades == 0:
+                return False, (
+                    f"❌ 백업 취소: 기존 백업엔 수동입력 거래 {_remote_trades}건이 있는데 "
+                    f"현재 세션엔 0건입니다. 실수로 데이터가 사라진 상태에서 덮어쓸 위험이 있어 막았습니다. "
+                    f"데이터가 맞다면 '⬇️ GitHub에서 복원'으로 먼저 불러온 뒤 다시 시도하세요."
+                )
     except Exception:
         pass
 
@@ -1591,8 +1609,13 @@ with st.sidebar:
         st.warning(f"GitHub Secret 미인식. 등록된 키: {_found_keys if _found_keys else '없음'}")
     if _gh_avail:
         st.markdown("#### ☁️ GitHub 백업 / 복원")
+        _has_data = 'master_df' in st.session_state
         _gc1, _gc2 = st.columns(2)
-        if _gc1.button("⬆️ GitHub에 백업", use_container_width=True, type="primary"):
+        if _gc1.button(
+            "⬆️ GitHub에 백업", use_container_width=True, type="primary",
+            disabled=not _has_data,
+            help=None if _has_data else "데이터가 로드되지 않은 상태입니다. 먼저 '⬇️ GitHub에서 복원'을 누르거나 파일을 업로드하세요.",
+        ):
             _ok, _msg = github_backup()
             (st.success if _ok else st.error)(_msg)
         if _gc2.button("⬇️ GitHub에서 복원", use_container_width=True):
@@ -1600,6 +1623,9 @@ with st.sidebar:
             (st.success if _ok else st.error)(_msg)
             if _ok:
                 st.rerun()
+        if not _has_data:
+            st.caption("⚠️ 아직 데이터가 로드되지 않아 백업 버튼이 비활성화되어 있습니다. "
+                       "빈 상태로 덮어쓰는 사고를 막기 위한 안전장치입니다 — 먼저 복원하거나 파일을 업로드하세요.")
         st.caption(f"저장 위치: `gonmau/stock-analyzer/{_GH_BACKUP_PATH}`")
         st.divider()
     else:
