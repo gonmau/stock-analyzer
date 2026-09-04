@@ -232,7 +232,8 @@
     "KODEX코스닥150": "229200.KS",
     "SOL조선TOP3플러스": "466920.KS",
     "퀀텀컴퓨팅": "QUBT",
-    "SPDR S&P500 ETF 트러스트": "SPY"
+    "SPDR S&P500 ETF 트러스트": "SPY",
+    "SPDRSP500ETF트러스트": "SPY"
   },
   "master_df": [
     {
