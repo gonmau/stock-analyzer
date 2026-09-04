@@ -1845,10 +1845,15 @@ with tab1:
                     key_to_price = fetch_current_prices_naver(tuple(_code6_pairs))
 
                 # ② 네이버 미조회 종목 → yfinance 폴백
-                _naver_miss_keys = [k for k, _ in _code6_pairs if k not in key_to_price]
-                if _naver_miss_keys or not _code6_pairs:
+                # 종목코드6이 아예 없는 보유종목(수동입력 ETF 등)도 빠짐없이 포함해야 함.
+                # _code6_pairs 안에서만 미스를 찾으면 종목코드6이 없는 종목은
+                # 애초에 그 목록에 들지도 못해 사용자 정의 티커 매핑(_user_ticker_map)이
+                # 있어도 yfinance 조회 자체가 시도되지 않는 버그가 있었음.
+                _all_holding_keys = set(_holding['종목키'])
+                _naver_miss_keys = [k for k in _all_holding_keys if k not in key_to_price]
+                if _naver_miss_keys:
                     ticker_map = resolve_tickers_yf(_holding)
-                    _fallback_tickers = {k: v for k, v in ticker_map.items() if k in _naver_miss_keys or not _code6_pairs}
+                    _fallback_tickers = {k: v for k, v in ticker_map.items() if k in _naver_miss_keys}
                     if _fallback_tickers:
                         fetch_current_prices_yf.clear()
                         _yf_prices = fetch_current_prices_yf(tuple(set(_fallback_tickers.values())))
