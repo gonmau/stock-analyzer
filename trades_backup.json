@@ -230,9 +230,8 @@
   "opt_same_day_buy_first": true,
   "user_ticker_map": {
     "KODEX코스닥150": "229200.KS",
-    "1Q미국SP500": "SPY",
     "SOL조선TOP3플러스": "466920.KS",
-    "SPDRSP500ETF트러스트": "SPY"
+    "1Q미국SP500": "0026S0.KS"
   },
   "master_df": [
     {
