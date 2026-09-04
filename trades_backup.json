@@ -233,7 +233,9 @@
     "SOL조선TOP3플러스": "466920.KS",
     "퀀텀컴퓨팅": "QUBT",
     "SPDR S&P500 ETF 트러스트": "SPY",
-    "SPDRSP500ETF트러스트": "SPY"
+    "SPDRSP500ETF트러스트": "SPY",
+    "1Q미국SP500": "SPY",
+    "1Q 미국S&P500": "SPY"
   },
   "master_df": [
     {
