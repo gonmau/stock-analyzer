@@ -132,6 +132,60 @@ def _fetch_naver_price(code6: str) -> int | None:
     return None
 
 
+@st.cache_data(ttl=300, show_spinner=False)  # 5분 캐시
+def fetch_usdkrw_rate() -> float | None:
+    """
+    네이버 환율 계산기 위젯에서 USD/KRW 매매기준율 조회. 실패 시 None.
+    미국 티커(QUBT, SPY 등) 현재가를 원화로 환산할 때 사용.
+    """
+    import urllib.request, json as _json
+    url = (
+        "https://m.search.naver.com/p/csearch/content/qapirender.nhn"
+        "?key=calculator&pkid=141&q=%ED%99%98%EC%9C%A8&where=m"
+        "&u1=keb&u6=standardUnit&u7=0&u3=USD&u4=KRW&u8=down&u2=1"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = _json.loads(r.read())
+        val = data["country"][1]["value"]
+        return float(str(val).replace(",", ""))
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)  # 5분 캐시 (yfinance마저 실패했을 때 최종 폴백)
+def fetch_current_prices_stooq(us_tickers: tuple) -> dict:
+    """
+    us_tickers: ('QUBT', 'SPY', ...) — 접미사 없는 순수 미국 티커만 대상.
+    반환: {'QUBT': 15, 'SPY': 660, ...} (달러 단위, 소수점 반올림)
+    Stooq는 인증/API키 없이 쓸 수 있고 Yahoo보다 차단이 훨씬 덜 잦아
+    yfinance가 막혔을 때의 최종 폴백으로 사용.
+    """
+    import urllib.request, csv, io
+    if not us_tickers:
+        return {}
+    syms = ",".join(f"{t.lower()}.us" for t in us_tickers)
+    url = f"https://stooq.com/q/l/?s={syms}&f=sd2t2ohlcv&h&e=csv"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            text = r.read().decode("utf-8", errors="ignore")
+        result = {}
+        reader = csv.DictReader(io.StringIO(text))
+        for row in reader:
+            sym = (row.get("Symbol") or "").upper().replace(".US", "")
+            close = row.get("Close") or ""
+            if sym and close and close not in ("N/D", ""):
+                try:
+                    result[sym] = round(float(close), 2)
+                except ValueError:
+                    pass
+        return result
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=60, show_spinner=False)   # 1분 캐시 (실시간, NXT 포함)
 def fetch_current_prices_naver(code6_map: tuple) -> dict:
     """
@@ -1862,6 +1916,7 @@ with tab1:
                 # 있어도 yfinance 조회 자체가 시도되지 않는 버그가 있었음.
                 _all_holding_keys = set(_holding['종목키'])
                 _naver_miss_keys = [k for k in _all_holding_keys if k not in key_to_price]
+                _fallback_tickers = {}
                 if _naver_miss_keys:
                     ticker_map = resolve_tickers_yf(_holding)
                     _fallback_tickers = {k: v for k, v in ticker_map.items() if k in _naver_miss_keys}
@@ -1872,6 +1927,36 @@ with tab1:
                             if _t in _yf_prices:
                                 key_to_price[_k] = _yf_prices[_t]
 
+                # ③ yfinance마저 실패한 미국 티커(QUBT, SPY 등) → Stooq 최종 폴백
+                # yfinance는 Streamlit Cloud IP가 Yahoo에 종종 차단당해 미국 티커가
+                # 통째로 안 뜨는 경우가 있음. Stooq는 그런 차단이 훨씬 덜하므로 재시도.
+                _stooq_miss_keys = [k for k in _all_holding_keys if k not in key_to_price]
+                _stooq_candidates = {
+                    k: t for k, t in _fallback_tickers.items()
+                    if k in _stooq_miss_keys and _is_us_ticker(t)
+                }
+                if _stooq_candidates:
+                    fetch_current_prices_stooq.clear()
+                    _stooq_prices = fetch_current_prices_stooq(tuple(set(_stooq_candidates.values())))
+                    for _k, _t in _stooq_candidates.items():
+                        if _t in _stooq_prices:
+                            key_to_price[_k] = _stooq_prices[_t]
+
+                # ④ 미국 티커(USD)로 조회된 가격은 원화로 환산
+                # 평균단가는 원 단위로 입력돼 있으므로, 현재가도 원 단위로 맞춰야
+                # 손익/평가금액 계산이 어긋나지 않는다.
+                _usd_price_keys = {
+                    k for k, t in _fallback_tickers.items()
+                    if _is_us_ticker(t) and k in key_to_price
+                }
+                _usdkrw_rate = None
+                if _usd_price_keys:
+                    fetch_usdkrw_rate.clear()
+                    _usdkrw_rate = fetch_usdkrw_rate()
+                    if _usdkrw_rate:
+                        for _k in _usd_price_keys:
+                            key_to_price[_k] = round(key_to_price[_k] * _usdkrw_rate)
+
                 if not key_to_price:
                     _col_msg.warning("⚠️ 조회 가능한 종목이 없습니다. 거래내역에 종목코드6 컬럼이 있는지 확인하세요.")
                 else:
@@ -1879,13 +1964,20 @@ with tab1:
                     _now_kst = datetime.now(_KST).strftime("%H:%M:%S")
                     st.session_state['live_prices_time'] = _now_kst
                     _naver_hit = len([k for k, _ in _code6_pairs if k in key_to_price])
-                    _yf_hit    = len(key_to_price) - _naver_hit
+                    _stooq_hit = len([k for k in _stooq_candidates if k in key_to_price])
+                    _yf_hit    = len(key_to_price) - _naver_hit - _stooq_hit
                     _hit_total = len(key_to_price)
                     _miss      = len(_holding) - _hit_total
                     msg = f"✅ {_hit_total}/{len(_holding)}개 완료 — {_now_kst} KST 기준"
                     msg += f"  (네이버 {_naver_hit}개"
                     if _yf_hit: msg += f" + yfinance폴백 {_yf_hit}개"
+                    if _stooq_hit: msg += f" + Stooq폴백 {_stooq_hit}개"
                     msg += ")"
+                    if _usd_price_keys:
+                        if _usdkrw_rate:
+                            msg += f"  · 환율 {_usdkrw_rate:,.2f}원 적용({len(_usd_price_keys)}개)"
+                        else:
+                            msg += f"  · ⚠️ 환율 조회 실패 — 미국 티커 {len(_usd_price_keys)}개는 달러 가격 그대로 표시됨"
                     if _miss: msg += f"  · 미조회 {_miss}개"
                     _col_msg.success(msg)
 
