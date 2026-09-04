@@ -1813,7 +1813,10 @@ with tab1:
                     _holding  = _holding.merge(_code_src, on='종목키', how='left')
 
                 # ① 네이버 금융 (약 10초 지연)
-                # 종목코드6 수집: combined_df 컬럼 우선, 없으면 _YF_NAME_MAP 역추출
+                # 종목코드6 수집: combined_df 컬럼 우선, 그 다음 사용자 정의 티커
+                # (_user_ticker_map), 마지막으로 내장 매핑(_YF_NAME_MAP) 순으로 보강.
+                # 보유종목 중 하나라도 코드6가 있으면 뒤 단계 전체를 건너뛰던 버그를
+                # 제거하고, 종목별로 아직 못 찾은 것만 마저 채우도록 변경.
                 _code6_pairs = []
                 _key_to_code6 = {}
 
@@ -1823,18 +1826,26 @@ with tab1:
                         if _c6 and len(_c6) == 6 and _c6.isdigit():
                             _key_to_code6[_hr['종목키']] = _c6
 
-                # YF_NORM_MAP에서 역추출 (정규화 종목명 → 티커 → 코드6)
-                if not _key_to_code6:
-                    for _, _hr in _holding.iterrows():
-                        _sk = _hr['종목키']
-                        _nm = str(_hr.get('종목명', _sk))
-                        for _lookup in [_sk, _nm, normalize_stock_name(_nm)]:
-                            _yf_t = _YF_NORM_MAP.get(_lookup, '')
-                            if _yf_t:
-                                _m = re.search(r'(\d{6})\.(KS|KQ)$', _yf_t)
-                                if _m:
-                                    _key_to_code6[_sk] = _m.group(1)
-                                    break
+                _user_map_snapshot = st.session_state.get('_user_ticker_map', {})
+                for _, _hr in _holding.iterrows():
+                    _sk = _hr['종목키']
+                    if _sk in _key_to_code6:
+                        continue
+                    _nm = str(_hr.get('종목명', _sk))
+                    _norm_nm = normalize_stock_name(_nm)
+                    _yf_t = (
+                        _user_map_snapshot.get(_nm)
+                        or _user_map_snapshot.get(_norm_nm)
+                        or _user_map_snapshot.get(_sk)
+                        or _YF_NORM_MAP.get(_sk)
+                        or _YF_NORM_MAP.get(_nm)
+                        or _YF_NORM_MAP.get(_norm_nm)
+                        or ''
+                    )
+                    if _yf_t:
+                        _m = re.search(r'(\d{6})\.(KS|KQ)$', _yf_t)
+                        if _m:
+                            _key_to_code6[_sk] = _m.group(1)
 
                 _code6_pairs = list(_key_to_code6.items())
 
