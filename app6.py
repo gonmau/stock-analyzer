@@ -1843,7 +1843,350 @@ def stock_selector_popup(label: str, stocks: list, key: str):
         else:
             st.toast("종목을 먼저 선택해주세요.")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+def run_live_price_refresh(disp_pos, _col_msg):
+    """보유종목 현재가를 조회해 session_state['live_prices']에 저장하고 결과를 _col_msg에 표시한다. (현재 잔고 / 보유종목 종합 탭 공용)"""
+    with st.spinner("현재가를 가져오는 중..."):
+        try:
+            from zoneinfo import ZoneInfo
+            _KST = ZoneInfo('Asia/Seoul')
+
+            _holding = disp_pos[disp_pos['잔고수량'] > 0].copy()
+            if '종목코드6' in combined_df.columns:
+                _code_src = combined_df.drop_duplicates('종목키')[['종목키', '종목코드6']]
+                _holding  = _holding.merge(_code_src, on='종목키', how='left')
+
+            # ① 네이버 금융 (약 10초 지연)
+            # 종목코드6 수집: combined_df 컬럼 우선, 그 다음 사용자 정의 티커
+            # (_user_ticker_map), 마지막으로 내장 매핑(_YF_NAME_MAP) 순으로 보강.
+            # 보유종목 중 하나라도 코드6가 있으면 뒤 단계 전체를 건너뛰던 버그를
+            # 제거하고, 종목별로 아직 못 찾은 것만 마저 채우도록 변경.
+            _code6_pairs = []
+            _key_to_code6 = {}
+
+            if '종목코드6' in _holding.columns:
+                for _, _hr in _holding.iterrows():
+                    _c6 = str(_hr.get('종목코드6', '') or '').strip()
+                    if _c6 and len(_c6) == 6 and _c6.isdigit():
+                        _key_to_code6[_hr['종목키']] = _c6
+
+            _user_map_snapshot = st.session_state.get('_user_ticker_map', {})
+            for _, _hr in _holding.iterrows():
+                _sk = _hr['종목키']
+                if _sk in _key_to_code6:
+                    continue
+                _nm = str(_hr.get('종목명', _sk))
+                _norm_nm = normalize_stock_name(_nm)
+                _yf_t = (
+                    _user_map_snapshot.get(_nm)
+                    or _user_map_snapshot.get(_norm_nm)
+                    or _user_map_snapshot.get(_sk)
+                    or _YF_NORM_MAP.get(_sk)
+                    or _YF_NORM_MAP.get(_nm)
+                    or _YF_NORM_MAP.get(_norm_nm)
+                    or ''
+                )
+                if _yf_t:
+                    _m = re.search(r'(\d{6})\.(KS|KQ)$', _yf_t)
+                    if _m:
+                        _key_to_code6[_sk] = _m.group(1)
+
+            _code6_pairs = list(_key_to_code6.items())
+
+
+            key_to_price = {}
+            if _code6_pairs:
+                fetch_current_prices_naver.clear()
+                key_to_price = fetch_current_prices_naver(tuple(_code6_pairs))
+
+            # ② 네이버 미조회 종목 → yfinance 폴백
+            # 종목코드6이 아예 없는 보유종목(수동입력 ETF 등)도 빠짐없이 포함해야 함.
+            # _code6_pairs 안에서만 미스를 찾으면 종목코드6이 없는 종목은
+            # 애초에 그 목록에 들지도 못해 사용자 정의 티커 매핑(_user_ticker_map)이
+            # 있어도 yfinance 조회 자체가 시도되지 않는 버그가 있었음.
+            _all_holding_keys = set(_holding['종목키'])
+            _naver_miss_keys = [k for k in _all_holding_keys if k not in key_to_price]
+            _fallback_tickers = {}
+            if _naver_miss_keys:
+                ticker_map = resolve_tickers_yf(_holding)
+                _fallback_tickers = {k: v for k, v in ticker_map.items() if k in _naver_miss_keys}
+                if _fallback_tickers:
+                    fetch_current_prices_yf.clear()
+                    _yf_prices = fetch_current_prices_yf(tuple(set(_fallback_tickers.values())))
+                    for _k, _t in _fallback_tickers.items():
+                        if _t in _yf_prices:
+                            key_to_price[_k] = _yf_prices[_t]
+
+            # ③ yfinance마저 실패한 미국 티커(QUBT, SPY 등) → Stooq 최종 폴백
+            # yfinance는 Streamlit Cloud IP가 Yahoo에 종종 차단당해 미국 티커가
+            # 통째로 안 뜨는 경우가 있음. Stooq는 그런 차단이 훨씬 덜하므로 재시도.
+            _stooq_miss_keys = [k for k in _all_holding_keys if k not in key_to_price]
+            _stooq_candidates = {
+                k: t for k, t in _fallback_tickers.items()
+                if k in _stooq_miss_keys and _is_us_ticker(t)
+            }
+            if _stooq_candidates:
+                fetch_current_prices_stooq.clear()
+                _stooq_prices = fetch_current_prices_stooq(tuple(set(_stooq_candidates.values())))
+                for _k, _t in _stooq_candidates.items():
+                    if _t in _stooq_prices:
+                        key_to_price[_k] = _stooq_prices[_t]
+
+            # ④ 미국 티커(USD)로 조회된 가격은 원화로 환산
+            # 평균단가는 원 단위로 입력돼 있으므로, 현재가도 원 단위로 맞춰야
+            # 손익/평가금액 계산이 어긋나지 않는다.
+            _usd_price_keys = {
+                k for k, t in _fallback_tickers.items()
+                if _is_us_ticker(t) and k in key_to_price
+            }
+            _usdkrw_rate = None
+            if _usd_price_keys:
+                fetch_usdkrw_rate.clear()
+                _usdkrw_rate = fetch_usdkrw_rate()
+                if _usdkrw_rate:
+                    for _k in _usd_price_keys:
+                        key_to_price[_k] = round(key_to_price[_k] * _usdkrw_rate)
+
+            if not key_to_price:
+                _col_msg.warning("⚠️ 조회 가능한 종목이 없습니다. 거래내역에 종목코드6 컬럼이 있는지 확인하세요.")
+            else:
+                st.session_state['live_prices']      = key_to_price
+                _now_kst = datetime.now(_KST).strftime("%H:%M:%S")
+                st.session_state['live_prices_time'] = _now_kst
+                _naver_hit = len([k for k, _ in _code6_pairs if k in key_to_price])
+                _stooq_hit = len([k for k in _stooq_candidates if k in key_to_price])
+                _yf_hit    = len(key_to_price) - _naver_hit - _stooq_hit
+                _hit_total = len(key_to_price)
+                _miss      = len(_holding) - _hit_total
+                msg = f"✅ {_hit_total}/{len(_holding)}개 완료 — {_now_kst} KST 기준"
+                msg += f"  (네이버 {_naver_hit}개"
+                if _yf_hit: msg += f" + yfinance폴백 {_yf_hit}개"
+                if _stooq_hit: msg += f" + Stooq폴백 {_stooq_hit}개"
+                msg += ")"
+                if _usd_price_keys:
+                    if _usdkrw_rate:
+                        msg += f"  · 환율 {_usdkrw_rate:,.2f}원 적용({len(_usd_price_keys)}개)"
+                    else:
+                        msg += f"  · ⚠️ 환율 조회 실패 — 미국 티커 {len(_usd_price_keys)}개는 달러 가격 그대로 표시됨"
+                if _miss: msg += f"  · 미조회 {_miss}개"
+                _col_msg.success(msg)
+
+                # 디스코드 알림 스크립트용 보유종목 스냅샷 동기화
+                try:
+                    _snap_rows = []
+                    for _, _hr in _holding.iterrows():
+                        _sk = _hr['종목키']
+                        _snap_rows.append({
+                            '종목키':   _sk,
+                            '종목명':   _hr.get('종목명', _sk),
+                            '평균단가': float(_hr.get('평균단가', 0) or 0),
+                            '잔고수량': float(_hr.get('잔고수량', 0) or 0),
+                            '종목코드6': _key_to_code6.get(_sk, ''),
+                        })
+                    _snap = {
+                        'updated_at': datetime.now(_KST).strftime('%Y-%m-%d %H:%M:%S'),
+                        'positions': _snap_rows,
+                    }
+                    github_push_file(
+                        "positions_snapshot.json",
+                        json.dumps(_snap, ensure_ascii=False, indent=2).encode("utf-8"),
+                        f"chore: update positions_snapshot.json ({_now_kst} KST)"
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            _col_msg.error(f"❌ 조회 실패: {e}")
+            st.exception(e)
+
+
+# ==========================================
+# 보유종목 종합 뷰 (누적손익 + 매매 시점)
+# ==========================================
+def _pnl_color(val):
+    try:
+        v = float(val)
+        if v > 0: return 'color:#ff6b6b;font-weight:bold'
+        if v < 0: return 'color:#74b9ff;font-weight:bold'
+    except Exception:
+        pass
+    return ''
+
+
+def build_holdings_overview(trades_df, pos_df, live_prices):
+    """
+    보유 중인 종목별 누적손익(실현+미실현)과 매매 시점 요약표.
+    trades_df: 거래내역(계좌 필터 적용 가능), pos_df: calculate_positions 결과,
+    live_prices: {종목키: 현재가(원)} — 없으면 미실현/누적손익은 비워 둔다.
+    """
+    if pos_df is None or pos_df.empty:
+        return pd.DataFrame()
+    held = pos_df[pos_df['잔고수량'] > 0]
+    if held.empty:
+        return pd.DataFrame()
+
+    t_all = trades_df[trades_df['매매유형'].isin(['BUY', 'SELL'])].copy()
+    t_all['거래일자'] = pd.to_datetime(t_all['거래일자'])
+    today = pd.Timestamp.now(tz='Asia/Seoul').tz_localize(None).normalize()
+
+    def _d(ts):
+        return ts.strftime('%Y-%m-%d') if pd.notna(ts) else None
+
+    rows = []
+    for _, r in held.iterrows():
+        sk = r['종목키']
+        s_df = _sort_trades_chronological(t_all[t_all['종목키'] == sk])
+        buys  = s_df[s_df['매매유형'] == 'BUY']
+        sells = s_df[s_df['매매유형'] == 'SELL']
+
+        # 현재 보유 로트 기준 최초매수일 (완전 매도 후 재매수했다면 재매수일 기준)
+        lots = calculate_fifo_lots(trades_df, sk)
+        if not lots.empty:
+            first_buy = pd.to_datetime(lots['매수일']).min()
+        else:
+            first_buy = buys['거래일자'].min() if not buys.empty else pd.NaT
+
+        last_buy  = buys.iloc[-1]  if not buys.empty  else None
+        last_sell = sells.iloc[-1] if not sells.empty else None
+        last_trade = s_df['거래일자'].max() if not s_df.empty else pd.NaT
+
+        qty, avg = float(r['잔고수량']), float(r['평균단가'])
+        cur = (live_prices or {}).get(sk)
+        has_px = cur is not None and pd.notna(cur) and float(cur) > 0
+        cur = float(cur) if has_px else None
+
+        realized = float(r['실현손익'])
+        unreal   = (cur - avg) * qty if has_px and avg > 0 else None
+        total    = realized + unreal if unreal is not None else None
+        buy_amt  = float(r['누적매수금액'])
+
+        rows.append({
+            '종목키':        sk,
+            '종목명':        r['종목명'],
+            '잔고수량':      qty,
+            '평균단가':      avg,
+            '현재가':        cur,
+            '평가수익률(%)': round((cur - avg) / avg * 100, 2) if has_px and avg > 0 else None,
+            '평가금액':      cur * qty if has_px else None,
+            '보유원가':      float(r['보유원가']),
+            '미실현손익':    unreal,
+            '실현손익':      realized,
+            '누적손익':      total,
+            '누적수익률(%)': round(total / buy_amt * 100, 2) if total is not None and buy_amt > 0 else None,
+            '최초매수일':    _d(first_buy),
+            '보유일수':      (today - first_buy).days if pd.notna(first_buy) else None,
+            '최근매수일':    _d(last_buy['거래일자']) if last_buy is not None else None,
+            '최근매수가':    float(last_buy['거래단가']) if last_buy is not None else None,
+            '최근매도일':    _d(last_sell['거래일자']) if last_sell is not None else None,
+            '최근매도가':    float(last_sell['거래단가']) if last_sell is not None else None,
+            '마지막거래후(일)': (today - last_trade).days if pd.notna(last_trade) else None,
+            '매수횟수':      len(buys),
+            '매도횟수':      len(sells),
+        })
+    out = pd.DataFrame(rows)
+    # None이 섞여 object 타입이 되지 않도록 숫자 컬럼은 float로 통일 (정렬·fillna 안정화)
+    for c in ['현재가', '평가수익률(%)', '평가금액', '미실현손익', '누적손익', '누적수익률(%)',
+              '보유일수', '최근매수가', '최근매도가', '마지막거래후(일)']:
+        out[c] = pd.to_numeric(out[c], errors='coerce')
+    return out
+
+
+def make_pnl_bar_chart(ov):
+    """종목별 누적손익 막대 (실현 + 미실현 누적, 합계는 마름모)."""
+    d = ov.copy()
+    d['_tot'] = d['누적손익'].fillna(d['실현손익'])
+    d = d.sort_values('_tot', ascending=True)      # 가로 막대: 마지막 행이 맨 위
+    has_live = d['미실현손익'].notna().any()
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=d['종목명'], x=d['실현손익'], orientation='h', name='실현손익',
+        marker_color='#f1c40f',
+        hovertemplate='%{y}<br>실현손익 %{x:,.0f}원<extra></extra>',
+    ))
+    if has_live:
+        fig.add_trace(go.Bar(
+            y=d['종목명'], x=d['미실현손익'].fillna(0), orientation='h', name='미실현손익',
+            marker_color='#5dade2',
+            hovertemplate='%{y}<br>미실현손익 %{x:,.0f}원<extra></extra>',
+        ))
+        fig.add_trace(go.Scatter(
+            y=d['종목명'], x=d['누적손익'], mode='markers', name='누적손익(합계)',
+            marker=dict(symbol='diamond', size=9, color='white', line=dict(color='#222', width=1)),
+            hovertemplate='%{y}<br>누적손익 %{x:,.0f}원<extra></extra>',
+        ))
+    fig.update_layout(
+        template='plotly_dark', barmode='relative',
+        height=max(300, 30 * len(d) + 120),
+        xaxis_title='손익 (원)', margin=dict(l=10, r=10, t=70, b=10),
+        legend=dict(orientation='h', x=1, xanchor='right', y=1.0, yanchor='bottom'),
+    )
+    return fig
+
+
+def make_trade_timeline_chart(trades_df, ov):
+    """보유종목 전체의 매수/매도 시점을 한 장에 표시 (행=종목, 크기=거래금액)."""
+    order = ov['종목키'].tolist()                  # 표 정렬 순서 그대로 위→아래
+    names = dict(zip(ov['종목키'], ov['종목명']))
+
+    t = trades_df[trades_df['종목키'].isin(order) & trades_df['매매유형'].isin(['BUY', 'SELL'])].copy()
+    t = t[t['거래수량'].abs() > 0]
+    t['거래일자'] = pd.to_datetime(t['거래일자'])
+    t['_name'] = t['종목키'].map(names)
+    t['_amt']  = (t['거래수량'].abs() * t['거래단가']).clip(lower=0)
+    mx = float(t['_amt'].max()) if not t.empty else 0.0
+    t['_sz'] = 7 + 15 * ((t['_amt'] / mx) ** 0.5 if mx > 0 else 0)
+
+    fig = go.Figure()
+    for ttype, label, color, symbol in [('BUY', '매수', '#e74c3c', 'triangle-up'),
+                                        ('SELL', '매도', '#2980b9', 'triangle-down')]:
+        d = t[t['매매유형'] == ttype]
+        if d.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=d['거래일자'], y=d['_name'], mode='markers', name=label,
+            marker=dict(color=color, symbol=symbol, size=d['_sz'],
+                        line=dict(color='rgba(0,0,0,0.5)', width=0.5)),
+            customdata=d[['거래수량', '거래단가', '_amt', '계좌']].values,
+            hovertemplate=(label + ' %{customdata[0]:,.0f}주 @ %{customdata[1]:,.0f}원'
+                           '<br>%{x|%Y-%m-%d} · 금액 %{customdata[2]:,.0f}원'
+                           '<br>%{customdata[3]}<extra>%{y}</extra>'),
+        ))
+
+    # 기본 구간: 현재 보유 로트의 가장 이른 매수일 ~ 오늘 (이전 거래는 '전체' 버튼으로)
+    today = pd.Timestamp.now(tz='Asia/Seoul').tz_localize(None).normalize()
+    first_dates = pd.to_datetime(ov['최초매수일'], errors='coerce').dropna()
+    x_range = None
+    if not first_dates.empty:
+        x_range = [(first_dates.min() - pd.DateOffset(days=20)).strftime('%Y-%m-%d'),
+                   (today + pd.DateOffset(days=10)).strftime('%Y-%m-%d')]
+
+    fig.update_xaxes(
+        type='date', range=x_range,
+        rangeselector=dict(
+            buttons=[
+                dict(count=3, label='3M', step='month', stepmode='backward'),
+                dict(count=6, label='6M', step='month', stepmode='backward'),
+                dict(count=1, label='1Y', step='year',  stepmode='backward'),
+                dict(count=3, label='3Y', step='year',  stepmode='backward'),
+                dict(step='all', label='전체'),
+            ],
+            bgcolor='#2c3e50', font=dict(color='white'),
+        ),
+    )
+    fig.update_yaxes(
+        type='category', categoryorder='array',
+        categoryarray=[names[k] for k in reversed(order)],   # 위→아래가 표와 같은 순서
+    )
+    fig.update_layout(
+        template='plotly_dark',
+        height=max(320, 34 * len(order) + 140),
+        margin=dict(l=10, r=10, t=70, b=10),
+        legend=dict(orientation='h', x=1, xanchor='right', y=1.12),
+    )
+    return fig, t
+
+
+tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13 = st.tabs([
+    "📌 보유종목 종합",
     "🗂 현재 잔고",
     "✏️ 수동 거래 입력",
     "🎯 종목별 상세",
@@ -1858,6 +2201,126 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13
     "📊 벤치마크",
     "🤖 매매 시나리오",
 ])
+
+
+# ════════════════════════════════════════
+# Tab 0: 보유종목 종합 (누적손익 + 매매 시점)
+# ════════════════════════════════════════
+with tab0:
+    st.subheader("보유종목 종합 — 누적손익 · 매매 시점")
+    st.caption(
+        "누적손익 = 실현손익 + 미실현손익 (이동평균단가법, 수수료·세금은 매도 시점 반영) · "
+        "누적수익률 = 누적손익 ÷ 누적매수금액"
+    )
+
+    _acc_opts0 = ['전체'] + sorted(combined_df['계좌'].dropna().astype(str).unique())
+    sel_acc0 = st.selectbox("계좌 필터", _acc_opts0, key="tab0_account")
+    if sel_acc0 != '전체':
+        _t0 = combined_df[combined_df['계좌'].astype(str) == sel_acc0]
+        _p0 = calculate_positions(_t0)
+    else:
+        _t0, _p0 = combined_df, positions_df
+
+    # 현재가 조회: 가격은 종목 단위라 계좌 필터와 무관하게 전체 보유종목 기준으로 조회
+    _b0, _m0 = st.columns([2, 8])
+    if _b0.button("📡 현재가 조회 (실시간)", type="primary", use_container_width=True, key="tab0_fetch"):
+        run_live_price_refresh(positions_df, _m0)
+    elif 'live_prices_time' in st.session_state:
+        _m0.caption(f"마지막 조회: {st.session_state['live_prices_time']} (재조회하려면 버튼을 누르세요)")
+
+    ov = build_holdings_overview(_t0, _p0, st.session_state.get('live_prices', {}))
+
+    if ov.empty:
+        st.info("현재 보유 중인 종목이 없습니다.")
+    else:
+        has_live0 = ov['현재가'].notna().any()
+        if not has_live0:
+            st.info("📡 현재가를 조회하면 미실현손익·누적손익이 함께 표시됩니다. (지금은 실현손익과 매매 시점만 표시)")
+
+        # ── 요약 지표 (보유종목 기준)
+        _real0 = ov['실현손익'].sum()
+        _k1, _k2, _k3, _k4 = st.columns(4)
+        _k1.metric("보유 종목", f"{len(ov)}개")
+        _k2.metric("실현손익 (보유종목)", f"₩{_real0:,.0f}")
+        if has_live0:
+            _px0   = ov[ov['미실현손익'].notna()]
+            _unr0  = _px0['미실현손익'].sum()
+            _tot0  = _px0['누적손익'].sum()
+            _buy0  = _p0[_p0['종목키'].isin(_px0['종목키'])]['누적매수금액'].sum()
+            _k3.metric("미실현손익", f"₩{_unr0:,.0f}",
+                       delta=f"{_unr0 / _px0['보유원가'].sum() * 100:+.2f}%" if _px0['보유원가'].sum() else None,
+                       delta_color="normal" if _unr0 >= 0 else "inverse")
+            _k4.metric("누적손익 (실현+미실현)", f"₩{_tot0:,.0f}",
+                       delta=f"{_tot0 / _buy0 * 100:+.2f}%" if _buy0 else None,
+                       delta_color="normal" if _tot0 >= 0 else "inverse")
+            if len(_px0) < len(ov):
+                st.caption(f"⚠️ 현재가 미조회 {len(ov) - len(_px0)}종목은 미실현·누적손익 합계에서 제외됩니다.")
+        else:
+            _k3.metric("미실현손익", "-")
+            _k4.metric("누적손익 (실현+미실현)", "-")
+
+        # ── 종합 표
+        _sort_opts = {
+            "누적손익 높은 순":     ('누적손익', False),
+            "누적손익 낮은 순 (손실 큰 순)": ('누적손익', True),
+            "누적수익률 높은 순":   ('누적수익률(%)', False),
+            "평가금액 큰 순":       ('평가금액', False),
+            "보유일수 긴 순":       ('보유일수', False),
+            "최근 거래 순":         ('마지막거래후(일)', True),
+        }
+        _sort_label = st.selectbox("정렬 기준", list(_sort_opts.keys()), key="tab0_sort")
+        _sc, _asc = _sort_opts[_sort_label]
+        if ov[_sc].isna().all():                    # 현재가 미조회 등으로 기준 값이 없으면 실현손익으로 대체
+            _sc, _asc = '실현손익', False
+        ov = ov.sort_values(_sc, ascending=_asc, na_position='last', kind='mergesort').reset_index(drop=True)
+
+        _cols0 = ['종목명', '잔고수량', '평균단가', '현재가', '평가수익률(%)',
+                  '미실현손익', '실현손익', '누적손익', '누적수익률(%)',
+                  '최초매수일', '보유일수', '최근매수일', '최근매수가', '최근매도일', '최근매도가',
+                  '매수횟수', '매도횟수']
+        _fmt0 = {
+            '잔고수량': '{:,.0f}', '평균단가': '{:,.0f}', '현재가': '{:,.0f}',
+            '평가수익률(%)': '{:+.2f}', '미실현손익': '{:,.0f}', '실현손익': '{:,.0f}',
+            '누적손익': '{:,.0f}', '누적수익률(%)': '{:+.2f}',
+            '보유일수': '{:,.0f}', '최근매수가': '{:,.0f}', '최근매도가': '{:,.0f}',
+            '매수횟수': '{:,.0f}', '매도횟수': '{:,.0f}',
+        }
+        _pcols0 = ['평가수익률(%)', '미실현손익', '실현손익', '누적손익', '누적수익률(%)']
+        st.dataframe(
+            ov[_cols0].style.map(_pnl_color, subset=_pcols0).format(_fmt0, na_rep='-'),
+            use_container_width=True, hide_index=True,
+            height=min(640, 38 + 35 * len(ov)),
+            column_config={'종목명': st.column_config.TextColumn(pinned=True)},
+        )
+        st.caption("최초매수일·보유일수는 현재 보유 중인 로트(FIFO) 기준 · 최근매수/매도는 해당 종목의 마지막 체결 · '-'는 해당 없음")
+
+        # ── 종목별 누적손익 막대
+        st.markdown("#### 💰 종목별 누적손익")
+        st.plotly_chart(make_pnl_bar_chart(ov), use_container_width=True)
+
+        # ── 매매 시점 타임라인 (보유종목 전체)
+        st.markdown("#### 🕒 매매 시점 한눈에 보기")
+        st.caption("▲ 매수 · ▼ 매도 · 마커 크기 = 거래금액 · 기본 구간은 현재 보유분의 최초 매수일부터 (이전 거래는 '전체' 버튼)")
+        _fig_tl, _t_tl = make_trade_timeline_chart(_t0, ov)
+        st.plotly_chart(_fig_tl, use_container_width=True)
+
+        # ── 최근 매매 내역
+        with st.expander("📋 최근 매매 내역 (보유종목 전체, 최근 30건)", expanded=False):
+            _rt = _t_tl.copy()
+            _sort_by = ['거래일자'] + (['_global_seq'] if '_global_seq' in _rt.columns else [])
+            _rt = _rt.sort_values(_sort_by, ascending=False).head(30)
+            _rt['구분'] = _rt['매매유형'].map({'BUY': '매수', 'SELL': '매도'})
+            _rt['거래일자'] = _rt['거래일자'].dt.strftime('%Y-%m-%d')
+            _rt = _rt.drop(columns=['종목명', '거래금액'], errors='ignore').rename(columns={'_name': '종목명', '_amt': '거래금액'})
+            st.dataframe(
+                _rt[['거래일자', '종목명', '구분', '거래수량', '거래단가', '거래금액', '계좌']]
+                .style.map(lambda v: 'color:#ff6b6b' if v == '매수' else ('color:#74b9ff' if v == '매도' else ''), subset=['구분'])
+                .format({'거래수량': '{:,.0f}', '거래단가': '{:,.0f}', '거래금액': '{:,.0f}'}),
+                use_container_width=True, hide_index=True,
+            )
+
+        # ── 종목 상세 팝업 (기존 기능 재사용)
+        stock_selector_popup("종목 상세 (매매 타임라인 · 거래내역 · 손익 추이)", ov['종목명'].tolist(), key="tab0_detail")
 
 
 # ════════════════════════════════════════
@@ -1882,157 +2345,7 @@ with tab1:
     # ── 현재가 조회 버튼 ──
     _col_btn, _col_msg = st.columns([2, 8])
     if _col_btn.button("📡 현재가 조회 (실시간)", type="primary", use_container_width=True):
-        with st.spinner("현재가를 가져오는 중..."):
-            try:
-                from zoneinfo import ZoneInfo
-                _KST = ZoneInfo('Asia/Seoul')
-
-                _holding = disp_pos[disp_pos['잔고수량'] > 0].copy()
-                if '종목코드6' in combined_df.columns:
-                    _code_src = combined_df.drop_duplicates('종목키')[['종목키', '종목코드6']]
-                    _holding  = _holding.merge(_code_src, on='종목키', how='left')
-
-                # ① 네이버 금융 (약 10초 지연)
-                # 종목코드6 수집: combined_df 컬럼 우선, 그 다음 사용자 정의 티커
-                # (_user_ticker_map), 마지막으로 내장 매핑(_YF_NAME_MAP) 순으로 보강.
-                # 보유종목 중 하나라도 코드6가 있으면 뒤 단계 전체를 건너뛰던 버그를
-                # 제거하고, 종목별로 아직 못 찾은 것만 마저 채우도록 변경.
-                _code6_pairs = []
-                _key_to_code6 = {}
-
-                if '종목코드6' in _holding.columns:
-                    for _, _hr in _holding.iterrows():
-                        _c6 = str(_hr.get('종목코드6', '') or '').strip()
-                        if _c6 and len(_c6) == 6 and _c6.isdigit():
-                            _key_to_code6[_hr['종목키']] = _c6
-
-                _user_map_snapshot = st.session_state.get('_user_ticker_map', {})
-                for _, _hr in _holding.iterrows():
-                    _sk = _hr['종목키']
-                    if _sk in _key_to_code6:
-                        continue
-                    _nm = str(_hr.get('종목명', _sk))
-                    _norm_nm = normalize_stock_name(_nm)
-                    _yf_t = (
-                        _user_map_snapshot.get(_nm)
-                        or _user_map_snapshot.get(_norm_nm)
-                        or _user_map_snapshot.get(_sk)
-                        or _YF_NORM_MAP.get(_sk)
-                        or _YF_NORM_MAP.get(_nm)
-                        or _YF_NORM_MAP.get(_norm_nm)
-                        or ''
-                    )
-                    if _yf_t:
-                        _m = re.search(r'(\d{6})\.(KS|KQ)$', _yf_t)
-                        if _m:
-                            _key_to_code6[_sk] = _m.group(1)
-
-                _code6_pairs = list(_key_to_code6.items())
-
-
-                key_to_price = {}
-                if _code6_pairs:
-                    fetch_current_prices_naver.clear()
-                    key_to_price = fetch_current_prices_naver(tuple(_code6_pairs))
-
-                # ② 네이버 미조회 종목 → yfinance 폴백
-                # 종목코드6이 아예 없는 보유종목(수동입력 ETF 등)도 빠짐없이 포함해야 함.
-                # _code6_pairs 안에서만 미스를 찾으면 종목코드6이 없는 종목은
-                # 애초에 그 목록에 들지도 못해 사용자 정의 티커 매핑(_user_ticker_map)이
-                # 있어도 yfinance 조회 자체가 시도되지 않는 버그가 있었음.
-                _all_holding_keys = set(_holding['종목키'])
-                _naver_miss_keys = [k for k in _all_holding_keys if k not in key_to_price]
-                _fallback_tickers = {}
-                if _naver_miss_keys:
-                    ticker_map = resolve_tickers_yf(_holding)
-                    _fallback_tickers = {k: v for k, v in ticker_map.items() if k in _naver_miss_keys}
-                    if _fallback_tickers:
-                        fetch_current_prices_yf.clear()
-                        _yf_prices = fetch_current_prices_yf(tuple(set(_fallback_tickers.values())))
-                        for _k, _t in _fallback_tickers.items():
-                            if _t in _yf_prices:
-                                key_to_price[_k] = _yf_prices[_t]
-
-                # ③ yfinance마저 실패한 미국 티커(QUBT, SPY 등) → Stooq 최종 폴백
-                # yfinance는 Streamlit Cloud IP가 Yahoo에 종종 차단당해 미국 티커가
-                # 통째로 안 뜨는 경우가 있음. Stooq는 그런 차단이 훨씬 덜하므로 재시도.
-                _stooq_miss_keys = [k for k in _all_holding_keys if k not in key_to_price]
-                _stooq_candidates = {
-                    k: t for k, t in _fallback_tickers.items()
-                    if k in _stooq_miss_keys and _is_us_ticker(t)
-                }
-                if _stooq_candidates:
-                    fetch_current_prices_stooq.clear()
-                    _stooq_prices = fetch_current_prices_stooq(tuple(set(_stooq_candidates.values())))
-                    for _k, _t in _stooq_candidates.items():
-                        if _t in _stooq_prices:
-                            key_to_price[_k] = _stooq_prices[_t]
-
-                # ④ 미국 티커(USD)로 조회된 가격은 원화로 환산
-                # 평균단가는 원 단위로 입력돼 있으므로, 현재가도 원 단위로 맞춰야
-                # 손익/평가금액 계산이 어긋나지 않는다.
-                _usd_price_keys = {
-                    k for k, t in _fallback_tickers.items()
-                    if _is_us_ticker(t) and k in key_to_price
-                }
-                _usdkrw_rate = None
-                if _usd_price_keys:
-                    fetch_usdkrw_rate.clear()
-                    _usdkrw_rate = fetch_usdkrw_rate()
-                    if _usdkrw_rate:
-                        for _k in _usd_price_keys:
-                            key_to_price[_k] = round(key_to_price[_k] * _usdkrw_rate)
-
-                if not key_to_price:
-                    _col_msg.warning("⚠️ 조회 가능한 종목이 없습니다. 거래내역에 종목코드6 컬럼이 있는지 확인하세요.")
-                else:
-                    st.session_state['live_prices']      = key_to_price
-                    _now_kst = datetime.now(_KST).strftime("%H:%M:%S")
-                    st.session_state['live_prices_time'] = _now_kst
-                    _naver_hit = len([k for k, _ in _code6_pairs if k in key_to_price])
-                    _stooq_hit = len([k for k in _stooq_candidates if k in key_to_price])
-                    _yf_hit    = len(key_to_price) - _naver_hit - _stooq_hit
-                    _hit_total = len(key_to_price)
-                    _miss      = len(_holding) - _hit_total
-                    msg = f"✅ {_hit_total}/{len(_holding)}개 완료 — {_now_kst} KST 기준"
-                    msg += f"  (네이버 {_naver_hit}개"
-                    if _yf_hit: msg += f" + yfinance폴백 {_yf_hit}개"
-                    if _stooq_hit: msg += f" + Stooq폴백 {_stooq_hit}개"
-                    msg += ")"
-                    if _usd_price_keys:
-                        if _usdkrw_rate:
-                            msg += f"  · 환율 {_usdkrw_rate:,.2f}원 적용({len(_usd_price_keys)}개)"
-                        else:
-                            msg += f"  · ⚠️ 환율 조회 실패 — 미국 티커 {len(_usd_price_keys)}개는 달러 가격 그대로 표시됨"
-                    if _miss: msg += f"  · 미조회 {_miss}개"
-                    _col_msg.success(msg)
-
-                    # 디스코드 알림 스크립트용 보유종목 스냅샷 동기화
-                    try:
-                        _snap_rows = []
-                        for _, _hr in _holding.iterrows():
-                            _sk = _hr['종목키']
-                            _snap_rows.append({
-                                '종목키':   _sk,
-                                '종목명':   _hr.get('종목명', _sk),
-                                '평균단가': float(_hr.get('평균단가', 0) or 0),
-                                '잔고수량': float(_hr.get('잔고수량', 0) or 0),
-                                '종목코드6': _key_to_code6.get(_sk, ''),
-                            })
-                        _snap = {
-                            'updated_at': datetime.now(_KST).strftime('%Y-%m-%d %H:%M:%S'),
-                            'positions': _snap_rows,
-                        }
-                        github_push_file(
-                            "positions_snapshot.json",
-                            json.dumps(_snap, ensure_ascii=False, indent=2).encode("utf-8"),
-                            f"chore: update positions_snapshot.json ({_now_kst} KST)"
-                        )
-                    except Exception:
-                        pass
-            except Exception as e:
-                _col_msg.error(f"❌ 조회 실패: {e}")
-                st.exception(e)
+        run_live_price_refresh(disp_pos, _col_msg)
     elif 'live_prices_time' in st.session_state:
         _col_msg.caption(f"마지막 조회: {st.session_state['live_prices_time']} (재조회하려면 버튼을 누르세요)")
 
