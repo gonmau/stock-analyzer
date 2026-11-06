@@ -2,11 +2,11 @@
   "펄어비스": {
     "_alert_cfg": {
       "target": 43000.0,
-      "stoplos": 34000.0,
+      "stoplos": 38400.0,
       "trailing_pct": 10.0
     },
-    "last_price": 32550,
-    "last_checked": "2026-11-02 11:08:46",
+    "last_price": 32900,
+    "last_checked": "2026-11-06 15:59:20",
     "fired": [
       "stoplos",
       "trailing"
@@ -32,8 +32,8 @@
       "stoplos": 300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 224750,
-    "last_checked": "2026-11-02 11:08:46",
+    "last_price": 189000,
+    "last_checked": "2026-11-06 15:59:20",
     "fired": [
       "stoplos",
       "trailing"
@@ -60,8 +60,8 @@
       "stoplos": 2300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 1449000,
-    "last_checked": "2026-11-02 11:08:46",
+    "last_price": 1144000,
+    "last_checked": "2026-11-06 15:59:20",
     "fired": [
       "stoplos",
       "trailing"
@@ -74,8 +74,8 @@
       "stoplos": 0.0,
       "trailing_pct": 0.0
     },
-    "last_price": 12035,
-    "last_checked": "2026-11-02 11:08:46"
+    "last_price": 10510,
+    "last_checked": "2026-11-06 15:59:20"
   },
   "SOL조선TOP3플러스": {
     "_alert_cfg": {
@@ -83,7 +83,7 @@
       "stoplos": 0.0,
       "trailing_pct": 0.0
     },
-    "last_price": 19910,
-    "last_checked": "2026-11-02 11:08:46"
+    "last_price": 17960,
+    "last_checked": "2026-11-06 15:59:20"
   }
 }
