@@ -1,7 +1,7 @@
 {
   "펄어비스": {
     "target": 43000,
-    "stoplos": 34000,
+    "stoplos": 38400,
     "trailing_pct": 10.0
   },
   "현대자동차": {
