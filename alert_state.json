@@ -5,8 +5,8 @@
       "stoplos": 38400.0,
       "trailing_pct": 10.0
     },
-    "last_price": 32900,
-    "last_checked": "2026-11-06 15:59:20",
+    "last_price": 32850,
+    "last_checked": "2026-11-06 16:05:21",
     "fired": [
       "stoplos",
       "trailing"
@@ -32,8 +32,8 @@
       "stoplos": 300000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 189000,
-    "last_checked": "2026-11-06 15:59:20",
+    "last_price": 188800,
+    "last_checked": "2026-11-06 16:05:21",
     "fired": [
       "stoplos",
       "trailing"
@@ -56,12 +56,12 @@
   },
   "SK하이닉스": {
     "_alert_cfg": {
-      "target": 2900000.0,
-      "stoplos": 2300000.0,
+      "target": 2000000.0,
+      "stoplos": 1800000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 1144000,
-    "last_checked": "2026-11-06 15:59:20",
+    "last_price": 1138000,
+    "last_checked": "2026-11-06 16:05:21",
     "fired": [
       "stoplos",
       "trailing"
@@ -75,7 +75,7 @@
       "trailing_pct": 0.0
     },
     "last_price": 10510,
-    "last_checked": "2026-11-06 15:59:20"
+    "last_checked": "2026-11-06 16:05:21"
   },
   "SOL조선TOP3플러스": {
     "_alert_cfg": {
@@ -84,6 +84,6 @@
       "trailing_pct": 0.0
     },
     "last_price": 17960,
-    "last_checked": "2026-11-06 15:59:20"
+    "last_checked": "2026-11-06 16:05:21"
   }
 }
