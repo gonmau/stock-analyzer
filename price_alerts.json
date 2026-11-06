@@ -46,7 +46,7 @@
   },
   "SK하이닉스": {
     "target": 2000000,
-    "stoplos": 2300000,
+    "stoplos": 1800000,
     "trailing_pct": 10.0
   },
   "SPDRSP500ETF트러스트": {
