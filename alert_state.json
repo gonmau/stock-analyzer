@@ -6,7 +6,7 @@
       "trailing_pct": 10.0
     },
     "last_price": 32850,
-    "last_checked": "2026-11-06 16:06:01",
+    "last_checked": "2026-11-06 16:06:26",
     "fired": [
       "stoplos",
       "trailing"
@@ -29,11 +29,11 @@
   "삼성전자": {
     "_alert_cfg": {
       "target": 250000.0,
-      "stoplos": 250000.0,
+      "stoplos": 200000.0,
       "trailing_pct": 10.0
     },
     "last_price": 188700,
-    "last_checked": "2026-11-06 16:06:01",
+    "last_checked": "2026-11-06 16:06:26",
     "fired": [
       "stoplos",
       "trailing"
@@ -61,7 +61,7 @@
       "trailing_pct": 10.0
     },
     "last_price": 1137000,
-    "last_checked": "2026-11-06 16:06:01",
+    "last_checked": "2026-11-06 16:06:26",
     "fired": [
       "stoplos",
       "trailing"
@@ -75,7 +75,7 @@
       "trailing_pct": 0.0
     },
     "last_price": 10510,
-    "last_checked": "2026-11-06 16:06:01"
+    "last_checked": "2026-11-06 16:06:26"
   },
   "SOL조선TOP3플러스": {
     "_alert_cfg": {
@@ -84,6 +84,6 @@
       "trailing_pct": 0.0
     },
     "last_price": 17960,
-    "last_checked": "2026-11-06 16:06:01"
+    "last_checked": "2026-11-06 16:06:26"
   }
 }
