@@ -5,8 +5,8 @@
       "stoplos": 38400.0,
       "trailing_pct": 10.0
     },
-    "last_price": 32850,
-    "last_checked": "2026-11-06 16:06:26",
+    "last_price": 31400,
+    "last_checked": "2026-11-11 11:34:02",
     "fired": [
       "stoplos",
       "trailing"
@@ -32,10 +32,9 @@
       "stoplos": 200000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 188700,
-    "last_checked": "2026-11-06 16:06:26",
+    "last_price": 202000,
+    "last_checked": "2026-11-11 11:34:02",
     "fired": [
-      "stoplos",
       "trailing"
     ],
     "high_since_buy": 375500
@@ -60,8 +59,8 @@
       "stoplos": 1800000.0,
       "trailing_pct": 10.0
     },
-    "last_price": 1137000,
-    "last_checked": "2026-11-06 16:06:26",
+    "last_price": 1244000,
+    "last_checked": "2026-11-11 11:34:02",
     "fired": [
       "stoplos",
       "trailing"
@@ -74,8 +73,8 @@
       "stoplos": 0.0,
       "trailing_pct": 0.0
     },
-    "last_price": 10510,
-    "last_checked": "2026-11-06 16:06:26"
+    "last_price": 11500,
+    "last_checked": "2026-11-11 11:34:02"
   },
   "SOL조선TOP3플러스": {
     "_alert_cfg": {
@@ -83,7 +82,7 @@
       "stoplos": 0.0,
       "trailing_pct": 0.0
     },
-    "last_price": 17960,
-    "last_checked": "2026-11-06 16:06:26"
+    "last_price": 18140,
+    "last_checked": "2026-11-11 11:34:02"
   }
 }
